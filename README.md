@@ -1,0 +1,79 @@
+# HTML Vault
+
+**English** | [日本語](README.ja.md)
+
+Self-hostable, password-protected vault to store and safely preview (sandboxed iframe) your HTML snippets. One Docker image runs on a VPS, Fly.io, Render, a home server, or a Raspberry Pi.
+
+![screenshot](docs/screenshot.png)
+
+## Quick start
+
+```bash
+cp .env.example .env        # set SESSION_SECRET (recommended)
+docker compose up -d
+docker compose logs         # initial password is printed once (if AUTH_PASSWORD is unset)
+```
+
+Open **http://localhost:3000** and log in. Change the password with `docker compose exec html-vault node setpass.js`.
+
+## Language (build-time)
+
+UI and server messages are baked in at build time — no runtime switcher. Set `APP_LANG` (`en`/`ja`, default `en`):
+
+- **Docker**: set it in `.env`, then `docker compose up -d --build`
+- **Node**: `APP_LANG=ja npm start`
+
+Strings live in [`locales/`](locales). Add a language by copying a locale file and building with that `APP_LANG`.
+
+## Environment variables
+
+| Variable | Default | Description |
+|------|------|------|
+| `PORT` | `3000` | Host port (container is fixed to 3000); listen port for plain Node |
+| `HOST` | `0.0.0.0` / `127.0.0.1` (Node) | Bind address |
+| `SESSION_SECRET` | random each boot | Session signing key. Set a fixed value in production (`openssl rand -hex 32`) |
+| `BEHIND_HTTPS` | `0` | Set `1` behind a TLS-terminating proxy (enables Secure cookies) |
+| `DATA_DIR` | `/data` / `./data` (Node) | Data directory |
+| `MAX_UPLOAD_MB` | `10` | Max HTML size (MB) |
+| `AUTH_PASSWORD` | random on first boot | Used only until `auth.json` exists |
+| `APP_LANG` | `en` | UI/message language (`en`/`ja`), applied at build time |
+
+## Deploy
+
+- **VPS / home / Raspberry Pi**: `docker compose up -d`. Use HTTPS when public (see Security). Details: [deploy/DEPLOY.md](deploy/DEPLOY.md). Cloudflare Tunnel: [deploy/CLOUDFLARE.md](deploy/CLOUDFLARE.md).
+- **Prebuilt image**: `ghcr.io/uzuradev/html-vault:latest` (replace `build:` with `image:` in `docker-compose.yml`).
+- **Fly.io**: `fly.toml` included — `fly launch --no-deploy`, create a volume, set `SESSION_SECRET`, `fly deploy`.
+- **Render**: `render.yaml` Blueprint included (persistent disk needs a paid instance).
+
+## Security
+
+| Threat | Mitigation |
+|------|------|
+| Unauthorized access | Login required, bcrypt, rate limit (10 / 15 min) |
+| XSS from stored HTML | Preview in `sandbox` iframe (no `allow-same-origin`); source as `text/plain` |
+| Session hijacking | HttpOnly / SameSite=Strict / Secure (HTTPS) cookie |
+| CSRF | Double-submit token on mutating APIs |
+| Path traversal | Server-generated IDs, 32-hex only |
+| Headers | CSP / X-Frame-Options via helmet |
+
+When public: use HTTPS and a fixed `SESSION_SECRET`. Optionally add a front gate (Basic auth / Cloudflare Access).
+
+Notes: the initial password is logged once (set `AUTH_PASSWORD` to avoid). Previewed HTML can still make outbound requests (external images/scripts/forms); restrict via a CSP if you open untrusted HTML.
+
+## Backups
+
+All data is under `data/`. Archive it:
+
+```bash
+tar czf html-vault-backup-$(date +%F).tar.gz data/
+```
+
+## Roadmap
+
+- Full-text body search (currently title/tag only)
+- Persistent session store (restarts currently require re-login; data is kept)
+- MCP integration; snippet export/import
+
+## Contributing / License
+
+[CONTRIBUTING.md](CONTRIBUTING.md) ([日本語](CONTRIBUTING.ja.md)) · [MIT](LICENSE)

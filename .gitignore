@@ -1,0 +1,5 @@
+node_modules/
+data/
+.env
+# 言語別に生成されるため追跡しない（locales/ + index.template.html が原本）
+public/index.html

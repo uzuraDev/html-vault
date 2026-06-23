@@ -1,0 +1,41 @@
+[Unit]
+Description=HTML Vault (self-hosted HTML snippet vault)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- 実行ユーザー / 作業ディレクトリ -----------------------------------------
+# 専用の非rootユーザーで動かす。デプロイ先に合わせて変更可。
+User=htmlvault
+Group=htmlvault
+WorkingDirectory=/opt/html-vault
+
+# --- 起動コマンド ------------------------------------------------------------
+# node の絶対パスは環境により異なる。`command -v node` で確認して合わせること。
+#   nvm 利用時 : /home/<user>/.nvm/versions/node/vXX/bin/node
+#   apt/nodesource : /usr/bin/node
+ExecStart=/usr/bin/node server.js
+
+# --- 環境変数 (Environment で注入。.env は使わない) --------------------------
+# SESSION_SECRET だけは git に載せたくないので、ここには書かず
+# ドロップイン (/etc/systemd/system/html-vault.service.d/secret.conf) で渡す。
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=BEHIND_HTTPS=1
+
+# --- 自動再起動 --------------------------------------------------------------
+Restart=always
+RestartSec=3
+
+# --- 追加のハードニング (任意・安全側) --------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# data/ への書き込みを許可 (アプリの保存先)
+ReadWritePaths=/opt/html-vault/data
+
+[Install]
+WantedBy=multi-user.target

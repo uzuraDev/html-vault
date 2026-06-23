@@ -1,0 +1,20 @@
+{
+  "name": "html-vault",
+  "version": "1.0.0",
+  "description": "Self-hostable HTML snippet vault with sandboxed preview",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "build:i18n": "node scripts/build-i18n.mjs",
+    "start": "npm run build:i18n && node server.js",
+    "setpass": "node setpass.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "express-rate-limit": "^7.4.0",
+    "bcryptjs": "^2.4.3",
+    "multer": "^1.4.5-lts.1",
+    "helmet": "^7.1.0"
+  }
+}

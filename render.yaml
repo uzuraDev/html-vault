@@ -1,0 +1,36 @@
+# Render 用 Blueprint（共通の Dockerfile を使用）。
+#
+# 採用理由: Render は render.yaml 内で「永続ディスク(disk)」と環境変数を
+# 一括宣言でき、データを持つ本アプリと相性が良いため、Railway ではなく Render を採録。
+# （Railway はボリューム設定がダッシュボード主体で、ファイルだけでは表現しにくい）
+#
+# 使い方: このリポジトリを Render に接続し "Blueprint" として読み込ませる。
+# 注意: 永続ディスク(disk)は Render の有料インスタンス（Starter以上）が必要です。
+#       無料インスタンスは再起動でディスクが消えるため、データ保持には向きません。
+
+services:
+  - type: web
+    name: html-vault
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/me
+    envVars:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PORT
+        value: "3000"
+      - key: DATA_DIR
+        value: /data
+      - key: BEHIND_HTTPS
+        value: "1"          # Render が TLS 終端
+      - key: MAX_UPLOAD_MB
+        value: "10"
+      - key: SESSION_SECRET
+        generateValue: true  # Render が生成して固定保持（再起動でログアウトしない）
+      - key: AUTH_PASSWORD
+        sync: false          # 任意。設定する場合はダッシュボードで入力（未設定なら初回ログに自動生成PW）
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1

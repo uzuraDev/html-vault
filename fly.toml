@@ -1,0 +1,39 @@
+# Fly.io 用設定。共通の Dockerfile をそのまま使います。
+#
+# 初回デプロイ手順:
+#   fly launch --no-deploy            # アプリ作成（このtomlを使う。app名は適宜変更）
+#   fly volumes create html_vault_data --size 1 --region nrt
+#   fly secrets set SESSION_SECRET=$(openssl rand -hex 32)
+#   # 初期パスワードを固定したい場合（任意。未設定なら初回ログに自動生成PWが出る）:
+#   fly secrets set AUTH_PASSWORD=<your-strong-password>
+#   fly deploy
+
+app = "html-vault"
+primary_region = "nrt"   # 東京。最寄りリージョンに変更可
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  HOST = "0.0.0.0"
+  DATA_DIR = "/data"
+  BEHIND_HTTPS = "1"     # Fly が TLS 終端するため Secure Cookie を有効化
+  MAX_UPLOAD_MB = "10"
+
+# データ永続化ボリューム（事前に `fly volumes create html_vault_data` が必要）
+[mounts]
+  source = "html_vault_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0   # 個人用途。アクセス時に起動・アイドルで停止（データは保持）
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100

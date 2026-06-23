@@ -1,0 +1,18 @@
+# ビルドコンテキストから除外（イメージを小さく・秘密を入れない）
+node_modules
+data
+.env
+.git
+.gitignore
+npm-debug.log*
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# OSS配布物のうちイメージに不要なもの
+.github
+deploy
+*.md
+fly.toml
+railway.json
+render.yaml

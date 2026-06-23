@@ -1,0 +1,28 @@
+# HTML Vault — どのクラウド/自宅サーバーでも `docker compose up -d` 一発で起動。
+#   1. cp .env.example .env  （必要に応じて編集）
+#   2. docker compose up -d
+#   3. docker compose logs で初期パスワードを確認（AUTH_PASSWORD 未設定時）
+#   4. http://localhost:3000 にアクセス
+services:
+  html-vault:
+    build:
+      context: .
+      args:
+        # 表示言語をビルド時に選択（en/ja）。.env の APP_LANG を使う（既定 en）。
+        # 言語を変えたら `docker compose up -d --build` で再ビルドが必要。
+        APP_LANG: ${APP_LANG:-en}
+    image: html-vault:local
+    container_name: html-vault
+    # 左=ホスト公開ポート(.env の PORT)、右=コンテナ内の固定ポート(3000)。
+    # ホスト側だけ変えたいケースに対応し、コンテナ内は常に 3000 で待受する。
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # .env の PORT はホスト公開用。コンテナ内アプリは 3000 固定で待受させる。
+      - PORT=3000
+    # データは data/ に永続化（コンテナを消しても残る）。
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

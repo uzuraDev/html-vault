@@ -1,0 +1,26 @@
+# Caddyfile — HTML Vault 用リバースプロキシ + 自動HTTPS
+#
+# 使い方:
+#   1. 下の REPLACE_WITH_YOUR_DOMAIN を実際のドメインに置き換える
+#   2. /etc/caddy/Caddyfile に配置
+#   3. sudo systemctl reload caddy
+#
+# Caddy は Let's Encrypt の証明書を自動取得・自動更新する。
+# HTTP(80) でのアクセスは自動的に HTTPS(443) へリダイレクトされる(Caddyの既定動作)。
+# 証明書取得には、このドメインのAレコードがVPSのグローバルIPを指し、
+# かつ 80/443 番ポートが外部から到達できる必要がある。
+
+REPLACE_WITH_YOUR_DOMAIN {
+	# アプリ(localhost:3000)へリバースプロキシ。
+	# Caddy は X-Forwarded-Proto: https を自動付与するため、
+	# アプリ側は trust proxy + BEHIND_HTTPS=1 で Secure Cookie が有効になる。
+	reverse_proxy localhost:3000
+
+	# アクセスログ(任意。不要ならブロックごと削除可)
+	log {
+		output file /var/log/caddy/html-vault.log
+		format console
+	}
+
+	encode gzip
+}
