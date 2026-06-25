@@ -4,7 +4,23 @@
 
 生成済み HTML スニペットを保存し、安全に（sandbox iframe で）プレビューできる、パスワード認証付きのセルフホスト Web アプリ。同じ Docker イメージが VPS / Fly.io / Render / 自宅サーバー・Raspberry Pi で動きます。
 
+LLM（Claude / ChatGPT のアーティファクト、AI 解説資料、ダッシュボードなど）で生成した HTML を、第三者のオンラインツールに貼り付ける代わりに、自分のインフラ上で保存・安全にプレビューしたい人向けです。個人開発の初期段階の OSS なので、その前提でフィードバックを歓迎します。
+
 ![screenshot](docs/screenshot.png)
+
+## 60秒で試す
+
+ビルド済みイメージを 1 コマンドで起動できます：
+
+```bash
+docker run -p 3000:3000 ghcr.io/uzuradev/html-vault:latest
+```
+
+**http://localhost:3000** を開いてログイン。初期パスワードは起動ログに一度だけ表示されるので、`docker logs <container>` で確認してください（`AUTH_PASSWORD` 未設定時）。データを永続化したい場合は任意で `-v $(pwd)/data:/data` を付けます（最小構成では不要）。
+
+Render にワンクリックでデプロイ（リポジトリの `render.yaml` Blueprint を使用）：
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/uzuraDev/html-vault)
 
 ## クイックスタート
 
