@@ -95,10 +95,6 @@ MCP クライアント（例: Claude Code）から、生成した HTML を直接
 tar czf html-vault-backup-$(date +%F).tar.gz data/
 ```
 
-## Roadmap
-
-いまは追跡中の項目はありません。アイデアや要望は [Issue](https://github.com/uzuraDev/html-vault/issues) へ。最近の実装: 本文の全文検索、セッション永続化（固定 `SESSION_SECRET` ならログインが再起動を生き残る）、スニペットのエクスポート/インポート。
-
 ## コントリビュート / ライセンス
 
 [CONTRIBUTING.ja.md](CONTRIBUTING.ja.md)（[English](CONTRIBUTING.md)）· [MIT](LICENSE)
