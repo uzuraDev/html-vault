@@ -8,6 +8,8 @@ Self-hostable, password-protected vault to store and safely preview (sandboxed i
 
 It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI explainers, dashboards) and want to store and safely preview those snippets on their own infrastructure instead of pasting them into third-party online tools. This is an early solo OSS project — feedback and issues are welcome.
 
+> 💡 **Upload straight from your AI client.** Set up the bundled MCP server and an MCP client (e.g. Claude Code) can push generated HTML into the vault for you — no manual save/upload — then you read it on any device. See [MCP integration](#mcp-integration-headless-upload).
+
 ## Try it in 60 seconds
 
 ```bash
