@@ -13,10 +13,10 @@ It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI
 ## Try it in 60 seconds
 
 ```bash
-docker run -p 3000:3000 ghcr.io/uzuradev/html-vault:latest
+docker run -p 3000:3000 -e AUTH_PASSWORD=change-me ghcr.io/uzuradev/html-vault:latest
 ```
 
-Open **http://localhost:3000**. On first boot a random initial password is printed once to the container logs — read it with `docker logs <container>` (or watch the foreground output). Data is in-memory for this throwaway run; to persist it, add a volume: `-v "$PWD/data:/data"`.
+Open **http://localhost:3000** and log in with the `AUTH_PASSWORD` you set. No password is ever auto-generated or written to the logs. Data is in-memory for this throwaway run; to persist it, add a volume: `-v "$PWD/data:/data"`.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/uzuraDev/html-vault)
 
@@ -25,12 +25,11 @@ The button uses the repo's `render.yaml` blueprint. See [Deploy](#deploy) below 
 ## Quick start
 
 ```bash
-cp .env.example .env        # set SESSION_SECRET (recommended)
+cp .env.example .env        # set AUTH_PASSWORD (and SESSION_SECRET)
 docker compose up -d
-docker compose logs         # initial password is printed once (if AUTH_PASSWORD is unset)
 ```
 
-Open **http://localhost:3000** and log in. Change the password with `docker compose exec html-vault node setpass.js`.
+Open **http://localhost:3000** and log in with `AUTH_PASSWORD`. No password is auto-generated or logged — if you didn't set `AUTH_PASSWORD`, create one with `docker compose exec html-vault node setpass.js` (also used to change it later).
 
 ## Language (build-time)
 
@@ -51,7 +50,7 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 | `BEHIND_HTTPS` | `0` | Set `1` behind a TLS-terminating proxy (enables Secure cookies) |
 | `DATA_DIR` | `/data` / `./data` (Node) | Data directory |
 | `MAX_UPLOAD_MB` | `10` | Max HTML size (MB) |
-| `AUTH_PASSWORD` | random on first boot | Used only until `auth.json` exists |
+| `AUTH_PASSWORD` | unset | First-login password (or run `setpass.js`). Used only until `auth.json` exists |
 | `APP_LANG` | `en` | UI/message language (`en`/`ja`), applied at build time |
 | `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [MCP server](#mcp-integration-headless-upload). |
 
@@ -75,7 +74,7 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 
 When public: use HTTPS and a fixed `SESSION_SECRET`. Optionally add a front gate (Basic auth / Cloudflare Access).
 
-Notes: the initial password is logged once (set `AUTH_PASSWORD` to avoid). Previewed HTML can still make outbound requests (external images/scripts/forms); restrict via a CSP if you open untrusted HTML.
+Notes: no password is auto-generated or written to logs — set `AUTH_PASSWORD` or run `setpass.js` to create the first login. Previewed HTML can still make outbound requests (external images/scripts/forms); restrict via a CSP if you open untrusted HTML.
 
 ## MCP integration (headless upload)
 

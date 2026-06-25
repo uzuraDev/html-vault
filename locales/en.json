@@ -47,8 +47,7 @@
     "untitled": "Untitled",
     "listening": "HTML Vault listening on http://{host}:{port}",
     "authInitFromEnv": "✓ Initial password set from AUTH_PASSWORD (data/auth.json).",
-    "authGenIntro": "Generated an initial password (shown only once):",
-    "authGenChange": "Recommended: change it after logging in via `npm run setpass`.",
+    "authNotSet": "ℹ No password set. Set AUTH_PASSWORD (env) or run `node setpass.js`, then restart. Login is disabled until a password is set.",
     "sessionSecretWarn": "ℹ SESSION_SECRET not set: restarts will log you out."
   }
 }

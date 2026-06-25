@@ -47,8 +47,7 @@
     "untitled": "無題",
     "listening": "HTML Vault listening on http://{host}:{port}",
     "authInitFromEnv": "✓ AUTH_PASSWORD から初期パスワードを設定しました (data/auth.json)。",
-    "authGenIntro": "初期パスワードを自動生成しました（この表示は一度きりです）:",
-    "authGenChange": "ログイン後に `npm run setpass` で変更することを推奨します。",
+    "authNotSet": "ℹ パスワード未設定です。AUTH_PASSWORD（環境変数）を設定するか `node setpass.js` を実行して再起動してください。設定までログインはできません。",
     "sessionSecretWarn": "ℹ SESSION_SECRET 未設定: 再起動でログアウトされます。"
   }
 }
