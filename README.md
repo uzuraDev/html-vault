@@ -93,10 +93,6 @@ All data is under `data/`. Archive it:
 tar czf html-vault-backup-$(date +%F).tar.gz data/
 ```
 
-## Roadmap
-
-Nothing tracked right now — ideas and feature requests are welcome via [issues](https://github.com/uzuraDev/html-vault/issues). Recently shipped: full-text body search, a persistent session store (logins survive restarts with a fixed `SESSION_SECRET`), and snippet export/import.
-
 ## Contributing / License
 
 [CONTRIBUTING.md](CONTRIBUTING.md) ([日本語](CONTRIBUTING.ja.md)) · [MIT](LICENSE)
