@@ -51,6 +51,7 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 | `MAX_UPLOAD_MB` | `10` | Max HTML size (MB) |
 | `AUTH_PASSWORD` | random on first boot | Used only until `auth.json` exists |
 | `APP_LANG` | `en` | UI/message language (`en`/`ja`), applied at build time |
+| `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [MCP server](#mcp-integration-headless-upload). |
 
 ## Deploy
 
@@ -74,6 +75,15 @@ When public: use HTTPS and a fixed `SESSION_SECRET`. Optionally add a front gate
 
 Notes: the initial password is logged once (set `AUTH_PASSWORD` to avoid). Previewed HTML can still make outbound requests (external images/scripts/forms); restrict via a CSP if you open untrusted HTML.
 
+## MCP integration (headless upload)
+
+Save model-generated HTML straight into the vault from an MCP client (e.g. Claude Code), then view it later on any device.
+
+1. Set an `API_TOKEN` on the vault (`.env`, e.g. `openssl rand -hex 32`) and restart. With a token set, `POST /api/snippets` and `GET /api/snippets` also accept `Authorization: Bearer <API_TOKEN>` — no login/CSRF needed for those. Leave `API_TOKEN` unset to disable token auth (default).
+2. Run the bundled MCP server in [`mcp/`](mcp) and register it with your client. See [mcp/README.md](mcp/README.md) for the `.mcp.json` example and the `upload_html` / `list_snippets` tools.
+
+The token is a write credential — keep it secret, prefer HTTPS, and rotate it by changing `API_TOKEN`. Token requests skip CSRF (a `Bearer` header isn't auto-attached by browsers, so it isn't a CSRF vector); the cookie/session flow still enforces CSRF.
+
 ## Backups
 
 All data is under `data/`. Archive it:
@@ -86,7 +96,7 @@ tar czf html-vault-backup-$(date +%F).tar.gz data/
 
 - Full-text body search (currently title/tag only)
 - Persistent session store (restarts currently require re-login; data is kept)
-- MCP integration; snippet export/import
+- Snippet export/import
 
 ## Contributing / License
 
