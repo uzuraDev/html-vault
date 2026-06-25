@@ -66,23 +66,19 @@ for (const dir of [DATA_DIR, SNIPPET_DIR]) {
 if (!fs.existsSync(INDEX_FILE)) fs.writeFileSync(INDEX_FILE, '[]');
 
 // auth.json が無ければ初期パスワードを用意する。
-// (Docker 等で setpass を回さずに `up` 一発で起動できるようにするため)
-//  - AUTH_PASSWORD が与えられていればそれを採用
-//  - 無ければランダム生成し、起動ログに一度だけ表示する
+//  - AUTH_PASSWORD が与えられていればそれを採用して作成する
+//  - 無ければ「パスワードをログに出さない」方針のため自動生成せず、
+//    案内だけ出して未設定のままにする (loadAuth()=null → /api/login が拒否)。
+//    利用者は AUTH_PASSWORD を設定するか setpass.js を実行する。
 function ensureInitialAuth() {
   if (fs.existsSync(AUTH_FILE)) return;
   const fromEnv = process.env.AUTH_PASSWORD ? String(process.env.AUTH_PASSWORD) : '';
-  const password = fromEnv || crypto.randomBytes(12).toString('base64url');
-  fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash: bcrypt.hashSync(password, 12) }, null, 2));
-  if (fromEnv) {
-    console.log(STR.authInitFromEnv);
-  } else {
-    console.log('============================================================');
-    console.log(' ' + STR.authGenIntro);
-    console.log('     ' + password);
-    console.log(' ' + STR.authGenChange);
-    console.log('============================================================');
+  if (!fromEnv) {
+    console.log(STR.authNotSet);
+    return;
   }
+  fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash: bcrypt.hashSync(fromEnv, 12) }, null, 2));
+  console.log(STR.authInitFromEnv);
 }
 ensureInitialAuth();
 
