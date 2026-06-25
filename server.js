@@ -54,6 +54,11 @@ const BEHIND_HTTPS = process.env.BEHIND_HTTPS === '1';
 const SESSION_SECRET =
   process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 
+// 任意: ヘッダ `Authorization: Bearer <API_TOKEN>` での書き込み/一覧を許可する。
+// MCP サーバ等のヘッドレスなアップロード用 (Claude が生成した HTML を直接保存する等)。
+// 未設定ならトークン認証は無効 = 従来どおりセッション認証のみ。
+const API_TOKEN = process.env.API_TOKEN ? String(process.env.API_TOKEN) : '';
+
 // ---- 初期化 --------------------------------------------------------------
 for (const dir of [DATA_DIR, SNIPPET_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -178,6 +183,38 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ error: STR.unauthorized });
 }
 
+// `Authorization: Bearer <API_TOKEN>` が一致するか (定数時間比較)。
+// API_TOKEN 未設定なら常に false (= トークン認証は無効)。
+function bearerOk(req) {
+  if (!API_TOKEN) return false;
+  const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  if (!m) return false;
+  const a = Buffer.from(m[1]);
+  const b = Buffer.from(API_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// 読み取りAPI用: Bearerトークン or セッションのどちらかでOK。
+function requireAuthOrToken(req, res, next) {
+  if (bearerOk(req) || (req.session && req.session.authed)) return next();
+  return res.status(401).json({ error: STR.unauthorized });
+}
+
+// 書き込みAPI用: Bearerトークン、または (セッション + CSRFトークン) を要求。
+// ブラウザ経由(Cookie)のときだけ CSRF を課す。Bearer はヘッダ認証なので
+// CSRF の対象外 (ブラウザが自動付与しない = CSRF攻撃の経路にならない)。
+function requireWriteAuth(req, res, next) {
+  if (bearerOk(req)) return next();
+  if (!(req.session && req.session.authed)) {
+    return res.status(401).json({ error: STR.unauthorized });
+  }
+  const token = req.get('x-csrf-token');
+  if (!token || token !== req.session.csrf) {
+    return res.status(403).json({ error: STR.csrfInvalid });
+  }
+  next();
+}
+
 // ---- multer (メモリ上で受ける。HTML/テキストのみ・MAX_UPLOAD_MB まで) -----
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -245,16 +282,15 @@ app.post('/api/logout', requireAuth, checkCsrf, (req, res) => {
 // ===========================================================================
 
 // 一覧 (メタデータのみ)
-app.get('/api/snippets', requireAuth, (req, res) => {
+app.get('/api/snippets', requireAuthOrToken, (req, res) => {
   const list = loadIndex().sort((a, b) => b.updated - a.updated);
-  res.json({ snippets: list, csrf: ensureCsrf(req) });
+  res.json({ snippets: list, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
 });
 
 // 作成 (貼り付け or ファイルアップロード)
 app.post(
   '/api/snippets',
-  requireAuth,
-  checkCsrf, // multer より前に CSRF を弾く（無効トークンで本文を読まない）
+  requireWriteAuth, // Bearerトークン or (セッション+CSRF)。multerより前に弾く
   upload.single('file'),
   (req, res) => {
     let html = '';
