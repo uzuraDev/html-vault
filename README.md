@@ -6,6 +6,20 @@ Self-hostable, password-protected vault to store and safely preview (sandboxed i
 
 ![screenshot](docs/screenshot.png)
 
+It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI explainers, dashboards) and want to store and safely preview those snippets on their own infrastructure instead of pasting them into third-party online tools. This is an early solo OSS project — feedback and issues are welcome.
+
+## Try it in 60 seconds
+
+```bash
+docker run -p 3000:3000 ghcr.io/uzuradev/html-vault:latest
+```
+
+Open **http://localhost:3000**. On first boot a random initial password is printed once to the container logs — read it with `docker logs <container>` (or watch the foreground output). Data is in-memory for this throwaway run; to persist it, add a volume: `-v "$PWD/data:/data"`.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/uzuraDev/html-vault)
+
+The button uses the repo's `render.yaml` blueprint. See [Deploy](#deploy) below for Fly.io, Render, and self-hosting details.
+
 ## Quick start
 
 ```bash
