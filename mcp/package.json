@@ -1,0 +1,16 @@
+{
+  "name": "html-vault-mcp",
+  "version": "1.0.0",
+  "description": "MCP server to upload HTML snippets to a self-hosted HTML Vault",
+  "type": "module",
+  "bin": {
+    "html-vault-mcp": "server.mjs"
+  },
+  "scripts": {
+    "inspect": "npx @modelcontextprotocol/inspector node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.8"
+  }
+}
