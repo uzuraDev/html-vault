@@ -7,7 +7,12 @@
     "loginButton": "ログイン",
     "badge": "自分専用",
     "logout": "ログアウト",
-    "searchPlaceholder": "検索 (タイトル/タグ)",
+    "exportLabel": "エクスポート",
+    "importLabel": "インポート",
+    "importDone": "{imported}件をインポートしました。（スキップ {skipped}件）",
+    "importFailed": "インポートに失敗しました: {msg}",
+    "searchPlaceholder": "検索 (タイトル/タグ/本文)",
+    "bodyBadge": "本文",
     "newTitle": "新規",
     "backToList": "← 一覧",
     "emptyState": "左の一覧から選択するか、＋で新規作成してください。",
@@ -40,6 +45,7 @@
     "tooLarge": "{mb}MB を超えています。",
     "notFound": "見つかりません。",
     "invalidId": "不正なIDです。",
+    "importInvalid": "インポートファイルが不正です。",
     "csrfInvalid": "CSRFトークンが無効です。",
     "fileTypeOnly": "HTML/テキストファイルのみ対応です。",
     "rateLimited": "ログイン試行が多すぎます。しばらく待ってください。",
@@ -48,6 +54,7 @@
     "listening": "HTML Vault listening on http://{host}:{port}",
     "authInitFromEnv": "✓ AUTH_PASSWORD から初期パスワードを設定しました (data/auth.json)。",
     "authNotSet": "ℹ パスワード未設定です。AUTH_PASSWORD（環境変数）を設定するか `node setpass.js` を実行して再起動してください。設定までログインはできません。",
-    "sessionSecretWarn": "ℹ SESSION_SECRET 未設定: 再起動でログアウトされます。"
+    "sessionSecretWarn": "ℹ SESSION_SECRET 未設定: 再起動でログアウトされます。",
+    "sessionStoreReady": "✓ セッションストア: data/sessions.json ({count}件を復元)。"
   }
 }

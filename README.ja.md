@@ -97,9 +97,7 @@ tar czf html-vault-backup-$(date +%F).tar.gz data/
 
 ## Roadmap
 
-- 本文の全文検索（現在はタイトル/タグのみ）
-- セッション永続化（現在は再起動で再ログイン。データは保持）
-- スニペットのエクスポート/インポート
+いまは追跡中の項目はありません。アイデアや要望は [Issue](https://github.com/uzuraDev/html-vault/issues) へ。最近の実装: 本文の全文検索、セッション永続化（固定 `SESSION_SECRET` ならログインが再起動を生き残る）、スニペットのエクスポート/インポート。
 
 ## コントリビュート / ライセンス
 

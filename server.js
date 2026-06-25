@@ -40,6 +40,7 @@ const DATA_DIR = process.env.DATA_DIR
 const SNIPPET_DIR = path.join(DATA_DIR, 'snippets');
 const INDEX_FILE = path.join(DATA_DIR, 'index.json');
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
+const SESSION_FILE = path.join(DATA_DIR, 'sessions.json');
 
 // アップロード/保存できる HTML の最大サイズ(MB)。既定 10MB。
 const MAX_UPLOAD_MB =
@@ -101,6 +102,159 @@ function loadAuth() {
   }
 }
 
+// ---- ファイルバックドのセッションストア --------------------------------
+// express-session の既定 MemoryStore は再起動でログインが揮発する。
+// セッションを DATA_DIR/sessions.json に sid -> { sess, expires } で永続化し、
+// 起動時に読み込む(期限切れは捨てる)。set/destroy は即時書き込み、touch は
+// メモリ上の期限だけ更新して短いデバウンス後にまとめて書く(rolling のディスク連打回避)。
+// ※ 再起動を跨いで有効なのは SESSION_SECRET が固定されているときのみ。
+class FileStore extends session.Store {
+  constructor(opts = {}) {
+    super();
+    this.file = opts.file;
+    // sess.cookie が maxAge/expires を持たない場合のフォールバック TTL。
+    this.ttlMs = Number(opts.ttlMs) > 0 ? Number(opts.ttlMs) : 1000 * 60 * 60 * 24;
+    this.sessions = new Map(); // sid -> { sess, expires(ms epoch) }
+    this.flushTimer = null;
+    this.loadSync();
+  }
+
+  // 起動時ロード。壊れていたら空で始める。期限切れは読み捨てる。
+  loadSync() {
+    let raw;
+    try {
+      raw = fs.readFileSync(this.file, 'utf8');
+    } catch {
+      return; // ファイル無し = 何もしない
+    }
+    let obj;
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      return; // 壊れていたら空で始める
+    }
+    const now = Date.now();
+    for (const sid of Object.keys(obj || {})) {
+      const entry = obj[sid];
+      if (!entry || typeof entry !== 'object') continue;
+      const expires = Number(entry.expires);
+      if (!expires || expires <= now) continue; // 期限切れは捨てる
+      if (!entry.sess || typeof entry.sess !== 'object') continue;
+      this.sessions.set(sid, { sess: entry.sess, expires });
+    }
+  }
+
+  // sess.cookie から失効時刻(ms epoch)を求める。無ければ ttlMs を足す。
+  expiryOf(sess) {
+    const cookie = sess && sess.cookie;
+    if (cookie) {
+      if (cookie.expires) {
+        const t = new Date(cookie.expires).getTime();
+        if (t) return t;
+      }
+      if (Number(cookie.originalMaxAge) > 0) {
+        return Date.now() + Number(cookie.originalMaxAge);
+      }
+      if (Number(cookie.maxAge) > 0) {
+        return Date.now() + Number(cookie.maxAge);
+      }
+    }
+    return Date.now() + this.ttlMs;
+  }
+
+  // メモリ内容を sessions.json へアトミックに書き出す(一時ファイル→rename)。
+  flushSync() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    const out = Object.create(null);
+    const now = Date.now();
+    for (const [sid, entry] of this.sessions) {
+      if (entry.expires <= now) {
+        this.sessions.delete(sid);
+        continue;
+      }
+      out[sid] = { sess: entry.sess, expires: entry.expires };
+    }
+    const tmp = this.file + '.tmp';
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(out), 'utf8');
+      fs.renameSync(tmp, this.file);
+    } catch {
+      // ディスク書き込み失敗は致命ではない(メモリ上は有効)。握りつぶす。
+    }
+  }
+
+  // touch の連打用: 即書きせず短時間でまとめて1回書く。
+  scheduleFlush() {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushSync();
+    }, 5000);
+    if (this.flushTimer.unref) this.flushTimer.unref();
+  }
+
+  get(sid, cb) {
+    const entry = this.sessions.get(sid);
+    if (!entry) return cb(null, null);
+    if (entry.expires <= Date.now()) {
+      this.sessions.delete(sid);
+      this.flushSync();
+      return cb(null, null);
+    }
+    // express-session は破壊的変更を避けるため複製を渡す。
+    let sess;
+    try {
+      sess = JSON.parse(JSON.stringify(entry.sess));
+    } catch {
+      return cb(null, null);
+    }
+    cb(null, sess);
+  }
+
+  set(sid, sess, cb) {
+    let stored;
+    try {
+      stored = JSON.parse(JSON.stringify(sess));
+    } catch (e) {
+      return cb && cb(e);
+    }
+    this.sessions.set(sid, { sess: stored, expires: this.expiryOf(sess) });
+    this.flushSync(); // 即時書き込み
+    if (cb) cb(null);
+  }
+
+  destroy(sid, cb) {
+    this.sessions.delete(sid);
+    this.flushSync(); // 即時書き込み
+    if (cb) cb(null);
+  }
+
+  // rolling 時に毎リクエスト呼ばれる。期限だけ更新しデバウンスして書く。
+  touch(sid, sess, cb) {
+    const entry = this.sessions.get(sid);
+    if (entry) {
+      entry.expires = this.expiryOf(sess);
+      this.scheduleFlush();
+    }
+    if (cb) cb(null);
+  }
+}
+
+// プロセス終了時に未フラッシュの touch を書き出す。
+const sessionStore = new FileStore({
+  file: SESSION_FILE,
+  ttlMs: 1000 * 60 * 60 * 8, // cookie.maxAge と同じ既定(8時間)
+});
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try { sessionStore.flushSync(); } catch {}
+    process.exit(0);
+  });
+}
+
 // ---- アプリ --------------------------------------------------------------
 const app = express();
 // プロキシ背後(BEHIND_HTTPS)のときだけ X-Forwarded-* を信頼する。
@@ -136,6 +290,7 @@ app.use(express.urlencoded({ extended: false, limit: BODY_LIMIT }));
 app.use(
   session({
     name: 'hv.sid',
+    store: sessionStore,
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
@@ -283,6 +438,85 @@ app.get('/api/snippets', requireAuthOrToken, (req, res) => {
   res.json({ snippets: list, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
 });
 
+// 全文検索 (タイトル/タグ/本文。本文はHTMLをプレーン化して走査する)
+// 個人用なので線形スキャンで十分。q は2文字以上のときだけ走査する。
+const SEARCH_EXCERPT_RADIUS = 60; // マッチ前後に確保する文字数 (合計 ~120字)
+
+// HTMLからプレーンテキストを作る (依存を増やさず手書き)。
+// script/style の中身を除去 → タグ除去 → 主要エンティティを軽く復元 → 空白圧縮。
+function htmlToText(html) {
+  return String(html == null ? '' : html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// text 内の最初の q (小文字化済み needle) の周辺を抜き出して抜粋を作る。
+function makeExcerpt(text, lowerNeedle) {
+  const idx = text.toLowerCase().indexOf(lowerNeedle);
+  if (idx === -1) return '';
+  const start = Math.max(0, idx - SEARCH_EXCERPT_RADIUS);
+  const end = Math.min(text.length, idx + lowerNeedle.length + SEARCH_EXCERPT_RADIUS);
+  let ex = text.slice(start, end);
+  if (start > 0) ex = '…' + ex;
+  if (end < text.length) ex = ex + '…';
+  return ex;
+}
+
+app.get('/api/search', requireAuthOrToken, (req, res) => {
+  const q = String((req.query && req.query.q) || '').trim();
+  if (q.length < 2) {
+    // 2文字未満は検索しない (空の結果を返す。UI側は全件表示にフォールバックする)
+    return res.json({ results: [], q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
+  }
+  const needle = q.toLowerCase();
+  const list = loadIndex().sort((a, b) => b.updated - a.updated);
+  const results = [];
+  for (const meta of list) {
+    const title = (meta.title || '').toLowerCase();
+    const tags = (meta.tags || '').toLowerCase();
+    const inTitle = title.includes(needle);
+    const inTags = tags.includes(needle);
+
+    // 本文は必要時のみ読む。ファイル欠損は無視してメタのみで判定する。
+    let bodyText = null;
+    const file = snippetPath(meta.id);
+    if (file && fs.existsSync(file)) {
+      try {
+        bodyText = htmlToText(fs.readFileSync(file, 'utf8'));
+      } catch {
+        bodyText = null;
+      }
+    }
+    const inBody = !!(bodyText && bodyText.toLowerCase().includes(needle));
+
+    if (!inTitle && !inTags && !inBody) continue;
+
+    const field = inTitle ? 'title' : inTags ? 'tags' : 'body';
+    const excerpt = inBody ? makeExcerpt(bodyText, needle) : '';
+    results.push({
+      id: meta.id,
+      title: meta.title,
+      tags: meta.tags,
+      created: meta.created,
+      updated: meta.updated,
+      bytes: meta.bytes,
+      field,
+      excerpt,
+    });
+  }
+  res.json({ results, q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
+});
+
 // 作成 (貼り付け or ファイルアップロード)
 app.post(
   '/api/snippets',
@@ -387,6 +621,107 @@ app.delete('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
   res.json({ ok: true });
 });
 
+// ===========================================================================
+//  エクスポート / インポート (全スニペットのバックアップ・移行)
+// ===========================================================================
+
+// 全スニペットを本体ごと JSON バンドルで書き出す。
+// 読み取り系なので requireAuthOrToken。GET なので CSRF 不要。
+app.get('/api/export', requireAuthOrToken, (req, res) => {
+  const list = loadIndex();
+  const snippets = [];
+  for (const meta of list) {
+    const file = snippetPath(meta.id);
+    let html = '';
+    if (file && fs.existsSync(file)) {
+      try {
+        html = fs.readFileSync(file, 'utf8');
+      } catch {
+        html = '';
+      }
+    }
+    snippets.push({
+      id: meta.id,
+      title: meta.title,
+      tags: meta.tags,
+      created: meta.created,
+      updated: meta.updated,
+      html,
+    });
+  }
+  const bundle = {
+    app: 'html-vault',
+    version: 1,
+    exportedAt: Date.now(),
+    snippets,
+  };
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+  res
+    .type('application/json; charset=utf-8')
+    .set('Content-Disposition', `attachment; filename="html-vault-export-${date}.json"`)
+    .send(JSON.stringify(bundle, null, 2));
+});
+
+// バンドルを取り込む。各エントリは必ず新しいIDで作成し、既存データを壊さない。
+// 書き込み系なので requireWriteAuth。
+app.post('/api/import', requireWriteAuth, (req, res) => {
+  const body = req.body || {};
+  const incoming = Array.isArray(body.snippets)
+    ? body.snippets
+    : Array.isArray(body)
+      ? body
+      : null;
+  if (!incoming) {
+    return res.status(400).json({ error: STR.importInvalid });
+  }
+
+  const list = loadIndex();
+  let imported = 0;
+  let skipped = 0;
+
+  for (const entry of incoming) {
+    if (!entry || typeof entry.html !== 'string') {
+      skipped++;
+      continue;
+    }
+    const html = entry.html;
+    if (!html.trim() || html.length > MAX_UPLOAD_BYTES) {
+      skipped++;
+      continue;
+    }
+    // 受け取った id は使わず必ず採番し直す (既存データの上書きを防ぐ)
+    const id = newId();
+    const file = snippetPath(id);
+    if (!file) {
+      skipped++;
+      continue;
+    }
+    try {
+      fs.writeFileSync(file, html, 'utf8');
+    } catch {
+      skipped++;
+      continue;
+    }
+    const now = Date.now();
+    const created = Number.isFinite(entry.created) ? entry.created : now;
+    const updated = Number.isFinite(entry.updated) ? entry.updated : now;
+    list.push({
+      id,
+      title: sanitizeText(entry.title) || STR.untitled,
+      tags: sanitizeText(entry.tags, 120),
+      created,
+      updated,
+      bytes: Buffer.byteLength(html, 'utf8'),
+    });
+    imported++;
+  }
+
+  saveIndex(list);
+  res.json({ ok: true, imported, skipped });
+});
+
 // ---- 静的UI --------------------------------------------------------------
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -398,6 +733,7 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, HOST, () => {
   console.log(STR.listening.replace('{host}', HOST).replace('{port}', PORT));
+  console.log(STR.sessionStoreReady.replace('{count}', sessionStore.sessions.size));
   if (!process.env.SESSION_SECRET) {
     console.log(STR.sessionSecretWarn);
   }

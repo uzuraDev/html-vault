@@ -95,9 +95,7 @@ tar czf html-vault-backup-$(date +%F).tar.gz data/
 
 ## Roadmap
 
-- Full-text body search (currently title/tag only)
-- Persistent session store (restarts currently require re-login; data is kept)
-- Snippet export/import
+Nothing tracked right now — ideas and feature requests are welcome via [issues](https://github.com/uzuraDev/html-vault/issues). Recently shipped: full-text body search, a persistent session store (logins survive restarts with a fixed `SESSION_SECRET`), and snippet export/import.
 
 ## Contributing / License
 
