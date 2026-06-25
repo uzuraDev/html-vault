@@ -7,7 +7,12 @@
     "loginButton": "Log in",
     "badge": "Private",
     "logout": "Log out",
-    "searchPlaceholder": "Search (title / tags)",
+    "exportLabel": "Export",
+    "importLabel": "Import",
+    "importDone": "Imported {imported} item(s). (Skipped {skipped}.)",
+    "importFailed": "Import failed: {msg}",
+    "searchPlaceholder": "Search (title / tags / body)",
+    "bodyBadge": "body",
     "newTitle": "New",
     "backToList": "← List",
     "emptyState": "Select an item on the left, or click ＋ to create one.",
@@ -40,6 +45,7 @@
     "tooLarge": "Exceeds {mb} MB.",
     "notFound": "Not found.",
     "invalidId": "Invalid ID.",
+    "importInvalid": "Invalid import file.",
     "csrfInvalid": "Invalid CSRF token.",
     "fileTypeOnly": "Only HTML/text files are supported.",
     "rateLimited": "Too many login attempts. Please wait a while.",
@@ -48,6 +54,7 @@
     "listening": "HTML Vault listening on http://{host}:{port}",
     "authInitFromEnv": "✓ Initial password set from AUTH_PASSWORD (data/auth.json).",
     "authNotSet": "ℹ No password set. Set AUTH_PASSWORD (env) or run `node setpass.js`, then restart. Login is disabled until a password is set.",
-    "sessionSecretWarn": "ℹ SESSION_SECRET not set: restarts will log you out."
+    "sessionSecretWarn": "ℹ SESSION_SECRET not set: restarts will log you out.",
+    "sessionStoreReady": "✓ Session store: data/sessions.json ({count} session(s) restored)."
   }
 }
