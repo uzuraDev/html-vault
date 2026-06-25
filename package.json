@@ -2,6 +2,8 @@
   "name": "html-vault",
   "version": "1.0.0",
   "description": "Self-hostable HTML snippet vault with sandboxed preview",
+  "author": "Ibuki Nagahama (https://github.com/uzuraDev)",
+  "license": "MIT",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
