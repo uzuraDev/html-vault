@@ -8,7 +8,7 @@ Self-hostable, password-protected vault to store and safely preview (sandboxed i
 
 It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI explainers, dashboards) and want to store and safely preview those snippets on their own infrastructure instead of pasting them into third-party online tools. This is an early solo OSS project — feedback and issues are welcome.
 
-> 💡 **Upload straight from your AI client.** Set up the bundled MCP server and an MCP client (e.g. Claude Code) can push generated HTML into the vault for you — no manual save/upload — then you read it on any device. See [MCP integration](#mcp-integration-headless-upload).
+> 💡 **Upload straight from your AI client.** Push generated HTML into the vault with no manual save/upload, then read it on any device. **Local MCP clients (e.g. Claude Code)** use the bundled stdio MCP server; **claude.ai / Claude chat / the mobile app** use the built-in remote MCP endpoint. See [MCP integration](#mcp-integration-headless-upload).
 
 ## Try it in 60 seconds
 
@@ -52,7 +52,8 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 | `MAX_UPLOAD_MB` | `10` | Max HTML size (MB) |
 | `AUTH_PASSWORD` | unset | First-login password (or run `setpass.js`). Used only until `auth.json` exists |
 | `APP_LANG` | `en` | UI/message language (`en`/`ja`), applied at build time |
-| `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [MCP server](#mcp-integration-headless-upload). |
+| `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [stdio MCP server](#mcp-integration-headless-upload). |
+| `MCP_SECRET_PATH` | unset (disabled) | Enables the remote MCP endpoint `/mcp/<MCP_SECRET_PATH>` for claude.ai-style custom connectors (404 when unset). Generate with `openssl rand -hex 24`. |
 
 ## Deploy
 
@@ -78,12 +79,46 @@ Notes: no password is auto-generated or written to logs — set `AUTH_PASSWORD` 
 
 ## MCP integration (headless upload)
 
-Save model-generated HTML straight into the vault from an MCP client (e.g. Claude Code), then view it later on any device.
+Save model-generated HTML straight into the vault during a conversation. There are two paths depending on the client.
+
+### A. Local MCP clients (e.g. Claude Code) — stdio MCP
 
 1. Set an `API_TOKEN` on the vault (`.env`, e.g. `openssl rand -hex 32`) and restart. With a token set, `POST /api/snippets` and `GET /api/snippets` also accept `Authorization: Bearer <API_TOKEN>` — no login/CSRF needed for those. Leave `API_TOKEN` unset to disable token auth (default).
 2. Run the bundled MCP server in [`mcp/`](mcp) and register it with your client. See [mcp/README.md](mcp/README.md) for the `.mcp.json` example and the `upload_html` / `list_snippets` tools.
 
 The token is a write credential — keep it secret, prefer HTTPS, and rotate it by changing `API_TOKEN`. Token requests skip CSRF (a `Bearer` header isn't auto-attached by browsers, so it isn't a CSRF vector); the cookie/session flow still enforces CSRF.
+
+### B. claude.ai / Claude chat / mobile app — built-in remote MCP
+
+Register the vault as a **custom connector** in claude.ai and Claude (web / desktop / **mobile app**) can save HTML it generates via the `upload_html` tool. No separate MCP process is needed — the server itself serves `/mcp/<MCP_SECRET_PATH>`.
+
+- **Transport**: Streamable HTTP / stateless (JSON responses, no extra dependencies)
+- **Tools**: `upload_html` (write) / `list_snippets` (read)
+- **Auth**: authless + secret path. `/mcp` returns 404 whenever `MCP_SECRET_PATH` is unset.
+
+Setup:
+
+1. **Make the server publicly reachable over HTTPS** (required). claude.ai connects from Anthropic's cloud, so `localhost` / LAN / VPN-only servers won't work. Put it behind a reverse proxy + domain + TLS, or a Cloudflare Tunnel (see [deploy/](deploy)).
+2. Generate a secret string, set it in `.env`, and restart:
+   ```bash
+   openssl rand -hex 24            # set the output as MCP_SECRET_PATH
+   # .env:  MCP_SECRET_PATH=<value>
+   ```
+3. In claude.ai → Customize > Connectors → **Add custom connector**, paste the URL:
+   ```
+   https://<your-domain>/mcp/<MCP_SECRET_PATH>
+   ```
+   No OAuth fields needed (authless). Registering on web/desktop syncs to the mobile app.
+4. Ask Claude to "save this HTML to the vault." Set `upload_html` to "Allow always" to make it near-automatic.
+
+Quick check (local):
+```bash
+curl -s -X POST http://localhost:3000/mcp/<MCP_SECRET_PATH> \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+> ⚠️ **A secret URL is not authentication.** Anyone with the URL can write. Avoid sharing/screenshotting/logging it, and rotate by changing `MCP_SECRET_PATH`. For stronger protection, add a front gate (OAuth / Cloudflare Access).
 
 ## Backups
 

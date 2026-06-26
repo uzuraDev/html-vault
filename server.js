@@ -1,5 +1,5 @@
 /**
- * HTML Vault — 学習用HTMLスニペット保管庫 (自分専用)
+ * HTML Vault — セルフホスト型のHTMLスニペット保管庫
  *
  * セキュリティ方針:
  *  - パスワード認証 (bcryptハッシュ。平文保存しない)
@@ -59,6 +59,12 @@ const SESSION_SECRET =
 // MCP サーバ等のヘッドレスなアップロード用 (Claude が生成した HTML を直接保存する等)。
 // 未設定ならトークン認証は無効 = 従来どおりセッション認証のみ。
 const API_TOKEN = process.env.API_TOKEN ? String(process.env.API_TOKEN) : '';
+
+// 任意: claude.ai 等のリモートMCPコネクター用エンドポイント /mcp/<MCP_SECRET_PATH>。
+// authless + 秘匿パスで保護。未設定なら /mcp は無効 (常に404)。生成例: openssl rand -hex 24
+// ※ claude.ai は Anthropic クラウドから接続するため、このサーバを公開HTTPSで
+//    到達可能にする必要がある (localhost / LAN内 / VPN内では繋がらない)。
+const MCP_SECRET_PATH = process.env.MCP_SECRET_PATH ? String(process.env.MCP_SECRET_PATH) : '';
 
 // ---- 初期化 --------------------------------------------------------------
 for (const dir of [DATA_DIR, SNIPPET_DIR]) {
@@ -395,6 +401,52 @@ function sanitizeText(s, max = 200) {
     .slice(0, max)
     .trim();
 }
+// ダウンロード用ファイル名 (タイトル由来。OS禁止文字を置換し .html を付ける)
+function downloadName(title) {
+  const s = sanitizeText(title, 100).replace(/[\\/:*?"<>|]/g, '_').trim();
+  return (s || 'snippet') + '.html';
+}
+
+// HTMLから推測タイトルを得る (<title> → <h1> → 'Untitled')。MCPのupload_htmlでtitle未指定時に使う。
+function guessTitle(html) {
+  const s = String(html == null ? '' : html);
+  const mt = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(s);
+  if (mt) {
+    const t = mt[1].replace(/<[^>]+>/g, '').trim();
+    if (t) return t;
+  }
+  const mh = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(s);
+  if (mh) {
+    const t = mh[1].replace(/<[^>]+>/g, '').trim();
+    if (t) return t;
+  }
+  return 'Untitled';
+}
+
+// スニペット作成の共通処理。/api/snippets(POST) と /mcp(upload_html) の両方から呼ぶ。
+// 成功で { meta } を、入力不正で { error, status } を返す。
+function createSnippet({ html, title, tags }) {
+  const body = typeof html === 'string' ? html : '';
+  if (!body.trim()) return { error: STR.emptyContent, status: 400 };
+  if (Buffer.byteLength(body, 'utf8') > MAX_UPLOAD_BYTES) {
+    return { error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB), status: 413 };
+  }
+  const id = newId();
+  fs.writeFileSync(snippetPath(id), body, 'utf8');
+  const now = Date.now();
+  const meta = {
+    id,
+    title: sanitizeText(title) || STR.untitled,
+    tags: sanitizeText(tags, 120),
+    created: now,
+    updated: now,
+    bytes: Buffer.byteLength(body, 'utf8'),
+  };
+  const list = loadIndex();
+  list.push(meta);
+  saveIndex(list);
+  return { meta };
+}
 
 // ===========================================================================
 //  認証API
@@ -439,7 +491,7 @@ app.get('/api/snippets', requireAuthOrToken, (req, res) => {
 });
 
 // 全文検索 (タイトル/タグ/本文。本文はHTMLをプレーン化して走査する)
-// 個人用なので線形スキャンで十分。q は2文字以上のときだけ走査する。
+// 想定規模では線形スキャンで十分。q は2文字以上のときだけ走査する。
 const SEARCH_EXCERPT_RADIUS = 60; // マッチ前後に確保する文字数 (合計 ~120字)
 
 // HTMLからプレーンテキストを作る (依存を増やさず手書き)。
@@ -529,30 +581,9 @@ app.post(
     } else if (req.body && typeof req.body.html === 'string') {
       html = req.body.html;
     }
-    if (!html.trim()) {
-      return res.status(400).json({ error: STR.emptyContent });
-    }
-    if (html.length > MAX_UPLOAD_BYTES) {
-      return res.status(413).json({ error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB) });
-    }
-
-    const id = newId();
-    const file = snippetPath(id);
-    fs.writeFileSync(file, html, 'utf8');
-
-    const now = Date.now();
-    const meta = {
-      id,
-      title: sanitizeText(req.body.title) || STR.untitled,
-      tags: sanitizeText(req.body.tags, 120),
-      created: now,
-      updated: now,
-      bytes: Buffer.byteLength(html, 'utf8'),
-    };
-    const list = loadIndex();
-    list.push(meta);
-    saveIndex(list);
-    res.json({ ok: true, snippet: meta });
+    const r = createSnippet({ html, title: req.body.title, tags: req.body.tags });
+    if (r.error) return res.status(r.status).json({ error: r.error });
+    res.json({ ok: true, snippet: r.meta });
   }
 );
 
@@ -563,6 +594,24 @@ app.get('/api/snippets/:id/raw', requireAuth, (req, res) => {
     return res.status(404).json({ error: STR.notFound });
   }
   res.type('text/plain; charset=utf-8').send(fs.readFileSync(file, 'utf8'));
+});
+
+// ダウンロード (Content-Disposition: attachment で1ファイルずつ保存。スマホでもそのまま保存できる)
+app.get('/api/snippets/:id/download', requireAuth, (req, res) => {
+  const file = snippetPath(req.params.id);
+  if (!file || !fs.existsSync(file)) {
+    return res.status(404).json({ error: STR.notFound });
+  }
+  const meta = loadIndex().find((s) => s.id === req.params.id);
+  const name = downloadName(meta && meta.title);
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+  res
+    .type('text/html; charset=utf-8')
+    .set(
+      'Content-Disposition',
+      `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`
+    )
+    .send(fs.readFileSync(file, 'utf8'));
 });
 
 // プレビュー (sandbox iframe で隔離表示するためのHTML本体)
@@ -622,104 +671,152 @@ app.delete('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
 });
 
 // ===========================================================================
-//  エクスポート / インポート (全スニペットのバックアップ・移行)
+//  リモートMCP (Streamable HTTP / ステートレス / 手書きJSON-RPC)
+//  claude.ai 等のカスタムコネクター(リモートMCP)用。/mcp/<MCP_SECRET_PATH> を
+//  authless + 秘匿パスで保護 (MCP_SECRET_PATH 未設定なら 404 = 無効)。
+//  Claude Code 向けの stdio 版 MCP (mcp/server.mjs) とは別系統。
 // ===========================================================================
+const MCP_PROTOCOL_VERSION = '2025-06-18';
+// クライアントが要求したバージョンが既知ならそれに合わせ、未知なら自分の最新で応答する(MCP流儀)。
+const MCP_SUPPORTED_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const MCP_TOOLS = [
+  {
+    name: 'upload_html',
+    description:
+      '生成したHTMLをhtml-vaultに保存し、閲覧URLを返す (Save generated HTML to the vault and return its view URL).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        html: { type: 'string', description: '保存するHTML全体' },
+        title: { type: 'string', description: '任意。未指定ならHTMLの<title>/<h1>から推測' },
+        tags: { type: 'string', description: '任意。カンマ区切りタグ' },
+      },
+      required: ['html'],
+    },
+  },
+  {
+    name: 'list_snippets',
+    description:
+      'html-vault内のスニペットを新しい順に一覧する (List snippets in the vault, newest first).',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'integer', minimum: 1, maximum: 100, description: '既定20' } },
+    },
+  },
+];
+const rpcResult = (id, result) => ({ jsonrpc: '2.0', id, result });
+const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
-// 全スニペットを本体ごと JSON バンドルで書き出す。
-// 読み取り系なので requireAuthOrToken。GET なので CSRF 不要。
-app.get('/api/export', requireAuthOrToken, (req, res) => {
-  const list = loadIndex();
-  const snippets = [];
-  for (const meta of list) {
-    const file = snippetPath(meta.id);
-    let html = '';
-    if (file && fs.existsSync(file)) {
+// 秘匿パスを定数時間で照合。未設定なら常に false。
+function mcpSecretOk(given) {
+  if (!MCP_SECRET_PATH) return false;
+  const a = Buffer.from(String(given == null ? '' : given));
+  const b = Buffer.from(MCP_SECRET_PATH);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// リバースプロキシ背後でも正しい scheme://host を得る (viewUrl 用)。
+function reqOrigin(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.headers.host || '';
+  return proto + '://' + host;
+}
+
+function mcpUploadHtml(args, origin) {
+  const a = args || {};
+  const title = (a.title && String(a.title).trim()) || guessTitle(a.html);
+  const r = createSnippet({ html: a.html, title, tags: a.tags });
+  if (r.error) throw new Error(r.error);
+  return JSON.stringify(
+    {
+      ok: true,
+      id: r.meta.id,
+      title: r.meta.title,
+      bytes: r.meta.bytes,
+      viewUrl: origin + '/',
+      previewUrl: origin + '/api/snippets/' + r.meta.id + '/preview',
+    },
+    null,
+    2
+  );
+}
+
+function mcpListSnippets(args) {
+  const n = parseInt((args && args.limit) || 20, 10);
+  const limit = Math.min(Math.max(Number.isFinite(n) ? n : 20, 1), 100);
+  const list = loadIndex().sort((a, b) => b.updated - a.updated).slice(0, limit);
+  return JSON.stringify(
+    list.map((s) => ({
+      id: s.id, title: s.title, tags: s.tags, bytes: s.bytes,
+      updated: new Date(s.updated).toISOString(),
+    })),
+    null,
+    2
+  );
+}
+
+function mcpDispatch(msg, origin) {
+  const { id, method, params } = msg;
+  switch (method) {
+    case 'initialize': {
+      const reqV = params && params.protocolVersion;
+      return rpcResult(id, {
+        protocolVersion: MCP_SUPPORTED_VERSIONS.includes(reqV) ? reqV : MCP_PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: 'html-vault', version: '1.0.0' },
+      });
+    }
+    case 'ping':
+      return rpcResult(id, {});
+    case 'tools/list':
+      return rpcResult(id, { tools: MCP_TOOLS });
+    case 'tools/call': {
+      const name = params && params.name;
+      const args = (params && params.arguments) || {};
       try {
-        html = fs.readFileSync(file, 'utf8');
-      } catch {
-        html = '';
+        let text;
+        if (name === 'upload_html') text = mcpUploadHtml(args, origin);
+        else if (name === 'list_snippets') text = mcpListSnippets(args);
+        else return rpcError(id, -32602, 'Unknown tool: ' + name);
+        return rpcResult(id, { content: [{ type: 'text', text }] });
+      } catch (e) {
+        // ツール実行時の失敗は JSON-RPC エラーではなく isError:true の結果で返す (MCP流儀)
+        return rpcResult(id, {
+          content: [{ type: 'text', text: 'エラー: ' + ((e && e.message) || e) }],
+          isError: true,
+        });
       }
     }
-    snippets.push({
-      id: meta.id,
-      title: meta.title,
-      tags: meta.tags,
-      created: meta.created,
-      updated: meta.updated,
-      html,
-    });
+    default:
+      return rpcError(id, -32601, 'Method not found: ' + method);
   }
-  const bundle = {
-    app: 'html-vault',
-    version: 1,
-    exportedAt: Date.now(),
-    snippets,
-  };
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  const date = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
-  res
-    .type('application/json; charset=utf-8')
-    .set('Content-Disposition', `attachment; filename="html-vault-export-${date}.json"`)
-    .send(JSON.stringify(bundle, null, 2));
+}
+
+// MCP本体。authless想定 (秘匿パスがゲート)。request が無ければ 202、あれば JSON で1応答。
+function handleMcp(req, res) {
+  const body = req.body;
+  const batch = Array.isArray(body);
+  const msgs = batch ? body : [body];
+  const hasRequest = msgs.some((m) => m && m.id !== undefined && m.id !== null && typeof m.method === 'string');
+  if (!hasRequest) return res.status(202).end(); // notification/response のみ
+  const origin = reqOrigin(req);
+  const out = [];
+  for (const m of msgs) {
+    // request(id付き + method文字列)のみ応答。notification や response オブジェクトは無視する。
+    if (!m || m.id == null || typeof m.method !== 'string') continue;
+    out.push(mcpDispatch(m, origin));
+  }
+  res.json(batch ? out : out[0]);
+}
+
+// POST: JSON-RPC を処理。GET: SSE未提供で405。秘匿パス不一致/未設定は 404 (存在を秘匿)。
+app.post('/mcp/:secret', (req, res) => {
+  if (!mcpSecretOk(req.params.secret)) return res.status(404).json({ error: STR.notFound });
+  handleMcp(req, res);
 });
-
-// バンドルを取り込む。各エントリは必ず新しいIDで作成し、既存データを壊さない。
-// 書き込み系なので requireWriteAuth。
-app.post('/api/import', requireWriteAuth, (req, res) => {
-  const body = req.body || {};
-  const incoming = Array.isArray(body.snippets)
-    ? body.snippets
-    : Array.isArray(body)
-      ? body
-      : null;
-  if (!incoming) {
-    return res.status(400).json({ error: STR.importInvalid });
-  }
-
-  const list = loadIndex();
-  let imported = 0;
-  let skipped = 0;
-
-  for (const entry of incoming) {
-    if (!entry || typeof entry.html !== 'string') {
-      skipped++;
-      continue;
-    }
-    const html = entry.html;
-    if (!html.trim() || html.length > MAX_UPLOAD_BYTES) {
-      skipped++;
-      continue;
-    }
-    // 受け取った id は使わず必ず採番し直す (既存データの上書きを防ぐ)
-    const id = newId();
-    const file = snippetPath(id);
-    if (!file) {
-      skipped++;
-      continue;
-    }
-    try {
-      fs.writeFileSync(file, html, 'utf8');
-    } catch {
-      skipped++;
-      continue;
-    }
-    const now = Date.now();
-    const created = Number.isFinite(entry.created) ? entry.created : now;
-    const updated = Number.isFinite(entry.updated) ? entry.updated : now;
-    list.push({
-      id,
-      title: sanitizeText(entry.title) || STR.untitled,
-      tags: sanitizeText(entry.tags, 120),
-      created,
-      updated,
-      bytes: Buffer.byteLength(html, 'utf8'),
-    });
-    imported++;
-  }
-
-  saveIndex(list);
-  res.json({ ok: true, imported, skipped });
+app.get('/mcp/:secret', (req, res) => {
+  if (!mcpSecretOk(req.params.secret)) return res.status(404).json({ error: STR.notFound });
+  res.set('Allow', 'POST').status(405).send('Method Not Allowed');
 });
 
 // ---- 静的UI --------------------------------------------------------------

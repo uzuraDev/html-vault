@@ -7,6 +7,12 @@ self-hosted HTML Vault — so you can view it later on any device.
 It authenticates with the vault's **API token** (`Authorization: Bearer`), not the
 browser login, so it works headless.
 
+> **Using claude.ai, Claude chat, or the mobile app instead?** Those connect to the
+> vault's built-in **remote** MCP endpoint (`/mcp/<MCP_SECRET_PATH>`), not this stdio
+> server — no separate process to run. See
+> [main README → MCP integration, Section B](../README.md#mcp-integration-headless-upload).
+> This stdio server is for **local** clients like Claude Code / Claude Desktop.
+
 ## Tools
 
 | Tool | What it does |
