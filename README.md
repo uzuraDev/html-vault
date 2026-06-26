@@ -8,7 +8,7 @@ Self-hostable, password-protected vault to store and safely preview (sandboxed i
 
 It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI explainers, dashboards) and want to store and safely preview those snippets on their own infrastructure instead of pasting them into third-party online tools. This is an early solo OSS project — feedback and issues are welcome.
 
-> 💡 **Upload straight from your AI client.** Push generated HTML into the vault with no manual save/upload, then read it on any device. **Local MCP clients (e.g. Claude Code)** use the bundled stdio MCP server; **claude.ai / Claude chat / the mobile app** use the built-in remote MCP endpoint. See [MCP integration](#mcp-integration-headless-upload).
+> 💡 **Upload straight from your AI client.** Push generated HTML into the vault with no manual save/upload, then read it on any device. **Local MCP clients (e.g. Claude Code)** use the bundled stdio MCP server; **claude.ai and the mobile app** use the built-in remote MCP endpoint. See [MCP integration](#mcp-integration-headless-upload).
 
 ## Try it in 60 seconds
 
@@ -88,7 +88,7 @@ Save model-generated HTML straight into the vault during a conversation. There a
 
 The token is a write credential — keep it secret, prefer HTTPS, and rotate it by changing `API_TOKEN`. Token requests skip CSRF (a `Bearer` header isn't auto-attached by browsers, so it isn't a CSRF vector); the cookie/session flow still enforces CSRF.
 
-### B. claude.ai / Claude chat / mobile app — built-in remote MCP
+### B. claude.ai / mobile app — built-in remote MCP
 
 Register the vault as a **custom connector** in claude.ai and Claude (web / desktop / **mobile app**) can save HTML it generates via the `upload_html` tool. No separate MCP process is needed — the server itself serves `/mcp/<MCP_SECRET_PATH>`.
 
