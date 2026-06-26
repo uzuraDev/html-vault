@@ -1,5 +1,7 @@
 # html-vault MCP server
 
+**English** | [日本語](README.ja.md)
+
 A small [MCP](https://modelcontextprotocol.io) server that lets an MCP client
 (Claude Code, Claude Desktop, etc.) save model-generated HTML straight into your
 self-hosted HTML Vault — so you can view it later on any device.

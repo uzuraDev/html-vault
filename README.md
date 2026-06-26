@@ -4,11 +4,11 @@
 
 Self-hostable, password-protected vault to store and safely preview (sandboxed iframe) your HTML snippets. One Docker image runs on a VPS, Fly.io, Render, a home server, or a Raspberry Pi.
 
-![screenshot](docs/screenshot.png)
-
 It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI explainers, dashboards) and want to store and safely preview those snippets on their own infrastructure instead of pasting them into third-party online tools. This is an early solo OSS project — feedback and issues are welcome.
 
 > 💡 **Upload straight from your AI client.** Push generated HTML into the vault with no manual save/upload, then read it on any device. **Local MCP clients (e.g. Claude Code)** use the bundled stdio MCP server; **claude.ai and the mobile app** use the built-in remote MCP endpoint. See [MCP integration](#mcp-integration-headless-upload).
+
+![screenshot](docs/screenshot.png)
 
 ## Try it in 60 seconds
 
@@ -16,11 +16,11 @@ It's aimed at people who generate HTML with LLMs (Claude / ChatGPT artifacts, AI
 docker run -p 3000:3000 -e AUTH_PASSWORD=change-me ghcr.io/uzuradev/html-vault:latest
 ```
 
-Open **http://localhost:3000** and log in with the `AUTH_PASSWORD` you set. No password is ever auto-generated or written to the logs. Data is in-memory for this throwaway run; to persist it, add a volume: `-v "$PWD/data:/data"`.
+Open **http://localhost:3000** and log in with the `AUTH_PASSWORD` you set. Data is in-memory for this throwaway run; to persist it, add a volume: `-v "$PWD/data:/data"`.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/uzuraDev/html-vault)
 
-The button uses the repo's `render.yaml` blueprint. See [Deploy](#deploy) below for Fly.io, Render, and self-hosting details.
+The button uses the repo's `render.yaml` Blueprint. See [Deploy](#deploy) below for Fly.io, Render, and self-hosting details.
 
 ## Quick start
 
@@ -90,7 +90,7 @@ The token is a write credential — keep it secret, prefer HTTPS, and rotate it 
 
 ### B. claude.ai / mobile app — built-in remote MCP
 
-Register the vault as a **custom connector** in claude.ai and Claude (web / desktop / **mobile app**) can save HTML it generates via the `upload_html` tool. No separate MCP process is needed — the server itself serves `/mcp/<MCP_SECRET_PATH>`.
+Register the vault as a **custom connector** in claude.ai, and Claude (web app or **mobile**) can save the HTML it generates via the `upload_html` tool. No separate MCP process is needed — the server itself serves `/mcp/<MCP_SECRET_PATH>`.
 
 - **Transport**: Streamable HTTP / stateless (JSON responses, no extra dependencies)
 - **Tools**: `upload_html` (write) / `list_snippets` (read)
