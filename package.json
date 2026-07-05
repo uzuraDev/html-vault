@@ -12,7 +12,7 @@
     "setpass": "node setpass.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^5.2.1",
     "express-session": "^1.18.0",
     "express-rate-limit": "^8.5.2",
     "bcryptjs": "^3.0.3",
