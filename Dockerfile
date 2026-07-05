@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # ─── build stage: 本番依存のみ取得 ──────────────────────────────
-FROM node:20-slim AS deps
+FROM node:26-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 
 # ─── runtime stage ─────────────────────────────────────────────
-FROM node:20-slim
+FROM node:26-slim
 
 # 表示言語をビルド時に選択（en/ja）。例: docker build --build-arg APP_LANG=ja .
 ARG APP_LANG=en
