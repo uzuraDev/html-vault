@@ -386,6 +386,11 @@ const upload = multer({
   },
 });
 
+// 一覧の共通ソート: ピン留めを先頭に、それぞれ更新日時の新しい順。
+function byPinnedThenUpdated(a, b) {
+  return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated - a.updated;
+}
+
 // ---- ユーティリティ ------------------------------------------------------
 function newId() {
   return crypto.randomBytes(16).toString('hex'); // 入力非依存のID
@@ -441,6 +446,7 @@ function createSnippet({ html, title, tags }) {
     created: now,
     updated: now,
     bytes: Buffer.byteLength(body, 'utf8'),
+    pinned: false,
   };
   const list = loadIndex();
   list.push(meta);
@@ -486,7 +492,7 @@ app.post('/api/logout', requireAuth, checkCsrf, (req, res) => {
 
 // 一覧 (メタデータのみ)
 app.get('/api/snippets', requireAuthOrToken, (req, res) => {
-  const list = loadIndex().sort((a, b) => b.updated - a.updated);
+  const list = loadIndex().sort(byPinnedThenUpdated);
   res.json({ snippets: list, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
 });
 
@@ -531,7 +537,7 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
     return res.json({ results: [], q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
   }
   const needle = q.toLowerCase();
-  const list = loadIndex().sort((a, b) => b.updated - a.updated);
+  const list = loadIndex().sort(byPinnedThenUpdated);
   const results = [];
   for (const meta of list) {
     const title = (meta.title || '').toLowerCase();
@@ -562,6 +568,7 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
       created: meta.created,
       updated: meta.updated,
       bytes: meta.bytes,
+      pinned: !!meta.pinned,
       field,
       excerpt,
     });
@@ -636,12 +643,13 @@ app.get('/api/snippets/:id/preview', requireAuth, (req, res) => {
     .send(fs.readFileSync(file, 'utf8'));
 });
 
-// 更新 (タイトル・タグ・内容)
+// 更新 (タイトル・タグ・内容・ピン留め)
 app.put('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
   const list = loadIndex();
   const meta = list.find((s) => s.id === req.params.id);
   if (!meta) return res.status(404).json({ error: STR.notFound });
 
+  let contentChanged = false;
   if (typeof req.body.html === 'string') {
     const file = snippetPath(req.params.id);
     if (!file) return res.status(400).json({ error: STR.invalidId });
@@ -650,10 +658,19 @@ app.put('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
     }
     fs.writeFileSync(file, req.body.html, 'utf8');
     meta.bytes = Buffer.byteLength(req.body.html, 'utf8');
+    contentChanged = true;
   }
-  if (typeof req.body.title === 'string') meta.title = sanitizeText(req.body.title) || STR.untitled;
-  if (typeof req.body.tags === 'string') meta.tags = sanitizeText(req.body.tags, 120);
-  meta.updated = Date.now();
+  if (typeof req.body.title === 'string') {
+    meta.title = sanitizeText(req.body.title) || STR.untitled;
+    contentChanged = true;
+  }
+  if (typeof req.body.tags === 'string') {
+    meta.tags = sanitizeText(req.body.tags, 120);
+    contentChanged = true;
+  }
+  // ピン留めの付け外し (幾つでも可)。並び順だけの変更なので updated は動かさない。
+  if (typeof req.body.pinned === 'boolean') meta.pinned = req.body.pinned;
+  if (contentChanged) meta.updated = Date.now();
   saveIndex(list);
   res.json({ ok: true, snippet: meta });
 });
@@ -744,10 +761,11 @@ function mcpUploadHtml(args, origin) {
 function mcpListSnippets(args) {
   const n = parseInt((args && args.limit) || 20, 10);
   const limit = Math.min(Math.max(Number.isFinite(n) ? n : 20, 1), 100);
-  const list = loadIndex().sort((a, b) => b.updated - a.updated).slice(0, limit);
+  const list = loadIndex().sort(byPinnedThenUpdated).slice(0, limit);
   return JSON.stringify(
     list.map((s) => ({
       id: s.id, title: s.title, tags: s.tags, bytes: s.bytes,
+      pinned: !!s.pinned,
       updated: new Date(s.updated).toISOString(),
     })),
     null,

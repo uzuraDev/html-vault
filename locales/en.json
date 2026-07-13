@@ -8,6 +8,8 @@
     "badge": "Private",
     "logout": "Log out",
     "downloadTitle": "Download",
+    "pinTitle": "Pin",
+    "unpinTitle": "Unpin",
     "searchPlaceholder": "Search (title / tags / body)",
     "bodyBadge": "body",
     "newTitle": "New",

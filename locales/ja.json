@@ -8,6 +8,8 @@
     "badge": "自分専用",
     "logout": "ログアウト",
     "downloadTitle": "ダウンロード",
+    "pinTitle": "ピン留め",
+    "unpinTitle": "ピン留めを解除",
     "searchPlaceholder": "検索 (タイトル/タグ/本文)",
     "bodyBadge": "本文",
     "newTitle": "新規",
