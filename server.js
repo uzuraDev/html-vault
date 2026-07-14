@@ -386,9 +386,16 @@ const upload = multer({
   },
 });
 
-// 一覧の共通ソート: ピン留めを先頭に、それぞれ更新日時の新しい順。
-function byPinnedThenUpdated(a, b) {
-  return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated - a.updated;
+// 一覧の共通ソート: ピン留めを先頭に、各グループ内は表示順キーの昇順。
+// 表示順キーは手動並べ替え済みなら order (0,1,2,...)、未設定なら -updated。
+// -updated は大きな負値になるため、並べ替え後に作られた新規スニペットは
+// 自動的にグループ先頭 (新しい順) に浮き、ドラッグされた時点で order が確定する。
+// 一度も並べ替えていなければ従来どおり更新日時の新しい順になる。
+function displayKey(m) {
+  return m.order != null ? m.order : -(m.updated || 0);
+}
+function byDisplayOrder(a, b) {
+  return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || displayKey(a) - displayKey(b);
 }
 
 // ---- ユーティリティ ------------------------------------------------------
@@ -492,7 +499,7 @@ app.post('/api/logout', requireAuth, checkCsrf, (req, res) => {
 
 // 一覧 (メタデータのみ)
 app.get('/api/snippets', requireAuthOrToken, (req, res) => {
-  const list = loadIndex().sort(byPinnedThenUpdated);
+  const list = loadIndex().sort(byDisplayOrder);
   res.json({ snippets: list, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
 });
 
@@ -537,7 +544,7 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
     return res.json({ results: [], q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
   }
   const needle = q.toLowerCase();
-  const list = loadIndex().sort(byPinnedThenUpdated);
+  const list = loadIndex().sort(byDisplayOrder);
   const results = [];
   for (const meta of list) {
     const title = (meta.title || '').toLowerCase();
@@ -641,6 +648,27 @@ app.get('/api/snippets/:id/preview', requireAuth, (req, res) => {
       'sandbox allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock'
     )
     .send(fs.readFileSync(file, 'utf8'));
+});
+
+// 並べ替え (ドラッグ&ドロップの表示順を保存)
+// ※ 下の /api/snippets/:id (PUT) にもマッチするパスなので、必ず先に登録する。
+// body.ids は「現在の表示順そのままの完全なID列」。各スニペットの order に列内の位置を保存する。
+// ピン留め/非ピンのグループ分けはソート側 (byDisplayOrder) が pinned を優先するため、
+// order はグループを跨いだ通し番号で問題ない (グループ内の相対順だけが効く)。
+// ids に無いスニペット (並べ替え後に別クライアントで作られた等) は order を付けず、
+// 未設定フォールバック (-updated) でグループ先頭に浮かせる。
+app.put('/api/snippets/order', requireAuth, checkCsrf, (req, res) => {
+  const ids = req.body && req.body.ids;
+  if (!Array.isArray(ids) || !ids.every((v) => typeof v === 'string' && /^[a-f0-9]{32}$/.test(v))) {
+    return res.status(400).json({ error: STR.invalidId });
+  }
+  const pos = new Map(ids.map((id, i) => [id, i]));
+  const list = loadIndex();
+  for (const meta of list) {
+    if (pos.has(meta.id)) meta.order = pos.get(meta.id);
+  }
+  saveIndex(list);
+  res.json({ ok: true });
 });
 
 // 更新 (タイトル・タグ・内容・ピン留め)
@@ -761,7 +789,7 @@ function mcpUploadHtml(args, origin) {
 function mcpListSnippets(args) {
   const n = parseInt((args && args.limit) || 20, 10);
   const limit = Math.min(Math.max(Number.isFinite(n) ? n : 20, 1), 100);
-  const list = loadIndex().sort(byPinnedThenUpdated).slice(0, limit);
+  const list = loadIndex().sort(byDisplayOrder).slice(0, limit);
   return JSON.stringify(
     list.map((s) => ({
       id: s.id, title: s.title, tags: s.tags, bytes: s.bytes,
