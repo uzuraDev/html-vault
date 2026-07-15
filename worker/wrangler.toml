@@ -1,0 +1,31 @@
+name = "html-vault"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+# Serve on <name>.<your-subdomain>.workers.dev by default
+workers_dev = true
+
+# Bundle public/index.html into the Worker as a text module
+rules = [
+  { type = "Text", globs = ["**/*.html"], fallthrough = true }
+]
+
+# KV: snippet bodies + metadata index
+# Replace the id with the one printed by:
+#   npx wrangler kv namespace create VAULT
+# (The "Deploy to Cloudflare" button replaces this placeholder automatically.)
+kv_namespaces = [
+  { binding = "VAULT", id = "REPLACE_AFTER_KV_CREATE" }
+]
+
+# Plain (non-secret) vars. Set DEMO_MODE = "1" to run a read-only public demo.
+# WARNING: DEMO_MODE makes every snippet in the bound KV namespace publicly
+# readable without login. Only enable it with a dedicated demo namespace
+# (seeded via scripts/seed-demo.mjs) — never against your real vault data.
+# [vars]
+# DEMO_MODE = "1"
+
+# Optional: serve on your own domain instead of workers.dev.
+# routes = [
+#   { pattern = "vault.example.com/*", zone_name = "example.com" }
+# ]

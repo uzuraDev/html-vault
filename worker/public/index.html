@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HTML Vault — Self-hosted HTML snippet vault</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --line:#2a2f3a;
+    --txt:#e7ebf0; --muted:#9aa3b2; --accent:#5b9dff; --accent2:#3b7ddd;
+    --danger:#ff6b6b; --ok:#43c59e; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--txt);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Noto Sans JP",sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  button,input,textarea{font:inherit;color:inherit}
+  button{cursor:pointer;border:none;border-radius:10px;padding:9px 14px;background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+  button.primary{background:var(--accent2);border-color:var(--accent2)}
+  button.primary:hover{background:var(--accent)}
+  button.ghost{background:transparent}
+  button.danger{background:transparent;border-color:#5a2b30;color:var(--danger)}
+  button:active{transform:translateY(1px)}
+  input,textarea{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;outline:none}
+  input:focus,textarea:focus{border-color:var(--accent)}
+  textarea{resize:vertical;min-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+  .muted{color:var(--muted)}
+  .row{display:flex;gap:10px;align-items:center}
+  .wrap{display:flex;flex-direction:column;height:100%}
+
+  /* 言語トグル (EN / 日本語) */
+  .lang-btn{flex:none;font-size:11px;padding:5px 9px;border-radius:8px;background:transparent;border:1px solid var(--line);color:var(--muted);letter-spacing:.3px}
+  .lang-btn:hover{color:var(--txt);border-color:var(--accent)}
+
+  /* 読み取り専用デモのバナー */
+  .demo-banner{padding:8px 14px;text-align:center;font-size:13px;background:#1d2735;border-bottom:1px solid var(--line);color:var(--txt)}
+  .demo-banner a{color:var(--accent);text-decoration:none;font-weight:600}
+  .demo-banner a:hover{text-decoration:underline}
+  body.demo #newBtn,body.demo .sidebar-foot,body.demo .del-item{display:none!important}
+
+  /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
+  .sidebar-head{display:flex;align-items:center;gap:8px;padding:11px 12px 11px 14px;border-bottom:1px solid var(--line)}
+  .sidebar-head h1{flex:1;min-width:0;font-size:14px;margin:0;font-weight:600;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .icon-btn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:9px;background:transparent;border:1px solid var(--line);color:var(--muted);flex:none;transition:color .12s,border-color .12s,background .12s}
+  .icon-btn:hover{color:var(--txt);border-color:var(--accent);background:var(--panel2)}
+  .icon-btn svg{width:16px;height:16px;display:block}
+  /* サイドバー最下部のログアウト */
+  .sidebar-foot{padding:10px 12px;border-top:1px solid var(--line)}
+  .logout{display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-start;padding:8px 10px;background:transparent;border:1px solid transparent;color:var(--muted);border-radius:9px}
+  .logout:hover{background:var(--panel2);color:var(--txt);border-color:var(--line)}
+  .logout svg{width:16px;height:16px;flex:none}
+  /* 折りたたみ時にコンテンツ左上へ出す「開く」ボタン */
+  .expand-btn{position:absolute;top:10px;left:10px;z-index:6;display:none;background:var(--panel);box-shadow:0 1px 6px rgba(0,0,0,.35)}
+
+  /* レイアウト */
+  main{flex:1;display:flex;min-height:0}
+  .sidebar{width:300px;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+  .content{position:relative;flex:1;display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+  .toolbar{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  .toolbar input{height:38px}
+  #newBtn{flex:none;width:38px;height:38px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
+  .list{overflow:auto;flex:1}
+  .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+  .item:hover{background:var(--panel2)}
+  .item.active{background:var(--panel2);border-left:3px solid var(--accent)}
+  .item .t{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:64px}
+  .item .meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+  /* 行アクション (DL/削除): 通常は隠し、ホバー/選択時に右上へアイコン表示 */
+  .item .del-item,.item .dl-item{position:absolute;top:8px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity .12s,background .12s,color .12s,border-color .12s}
+  .item .del-item{right:8px}
+  .item .dl-item{right:40px}
+  .item:hover .del-item,.item.active .del-item,.item:hover .dl-item,.item.active .dl-item{opacity:1}
+  .item .del-item:hover{background:rgba(255,107,107,.14);border-color:#5a2b30;color:var(--danger)}
+  .item .dl-item:hover{background:rgba(91,157,255,.14);border-color:var(--accent2);color:var(--accent)}
+  .item .del-item svg,.item .dl-item svg{width:15px;height:15px;display:block}
+  /* タッチ端末はホバーが無いので常時うっすら表示 */
+  @media (hover:none){ .item .del-item,.item .dl-item{opacity:.5} }
+  .tag{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1px 7px;font-size:10px}
+  .tag.body{background:transparent;border-color:var(--accent2);color:var(--accent)}
+  .item .excerpt{font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
+  .item .excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
+
+  /* ビュー切替 */
+  .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
+  .tabs button{font-size:13px;padding:6px 12px}
+  .tabs button.on{background:var(--accent2);border-color:var(--accent2)}
+  .view{flex:1;min-height:0;display:flex;flex-direction:column}
+  iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0}
+  pre.src{flex:1;margin:0;overflow:auto;padding:14px;background:#0b0d11;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+  .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:24px}
+
+  /* モーダル (ヘッダ / スクロールする本文 / 固定フッタ の3段。余分な余白を作らない) */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:20;backdrop-filter:blur(2px)}
+  .overlay.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);width:min(640px,100%);max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow:hidden}
+  .modal h2{margin:0;font-size:16px;font-weight:600;padding:15px 18px;border-bottom:1px solid var(--line)}
+  .modal-body{padding:16px 18px;overflow:auto;flex:1 1 auto}
+  .field{margin-bottom:14px}
+  .field:last-child{margin-bottom:0}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .modal .actions{display:flex;gap:10px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--line)}
+
+  /* ログイン */
+  .login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--bg)}
+  .login .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:26px;width:min(380px,100%)}
+  .login .card-head{display:flex;align-items:flex-start;gap:8px}
+  .login .card-head h1{flex:1}
+  .login h1{font-size:20px;margin:0 0 4px}
+  .login p{margin:0 0 18px}
+  .err{color:var(--danger);font-size:13px;min-height:18px;margin-top:8px}
+
+  .hide{display:none!important}
+  body.modal-open{overflow:hidden}
+
+  /* モバイル対応 (一覧 ⇆ 詳細 の切替表示) */
+  @media (max-width:760px){
+    main{flex-direction:column}
+    /* 一覧表示中はサイドバーを画面いっぱいに。詳細を開いたら隠す */
+    .sidebar{width:100%;border-right:0;border-bottom:1px solid var(--line);flex:1;min-height:0;max-height:none}
+    .sidebar.collapsed{display:none}
+    .content{flex:1;min-height:0}
+    /* 詳細を開くまでコンテンツは隠す */
+    .content.hidden-mobile{display:none}
+    .mobile-back{display:inline-flex!important}
+    #collapseBtn{display:none}  /* モバイルは master-detail で開閉するためトグル不要 */
+  }
+  .mobile-back{display:none}
+  /* デスクトップ: サイドバーの折りたたみ */
+  @media (min-width:761px){
+    .wrap.sb-collapsed .sidebar{display:none}
+    .wrap.sb-collapsed .expand-btn{display:flex}
+  }
+</style>
+</head>
+<body>
+
+<!-- ログイン画面 -->
+<div class="login" id="loginView">
+  <div class="card">
+    <div class="card-head">
+      <h1>🔐 HTML Vault</h1>
+      <button class="lang-btn" id="langBtnLogin" type="button"></button>
+    </div>
+    <p class="muted" id="loginTagline"></p>
+    <div class="field">
+      <label id="pwLabel"></label>
+      <input id="pw" type="password" autocomplete="current-password" placeholder="••••••••">
+    </div>
+    <button class="primary" style="width:100%" id="loginBtn"></button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- アプリ本体 -->
+<div class="wrap hide" id="appView">
+  <div class="demo-banner hide" id="demoBanner"><span id="demoText"></span> — <a id="demoLink" href="https://github.com/uzuraDev/html-vault" target="_blank" rel="noopener"></a></div>
+  <main>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <h1>📁 HTML Vault</h1>
+        <button class="lang-btn" id="langBtnApp" type="button"></button>
+        <button class="icon-btn" id="collapseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
+      </div>
+      <div class="toolbar">
+        <input id="search">
+        <button class="primary" id="newBtn">＋</button>
+      </div>
+      <div class="list" id="list"></div>
+      <div class="sidebar-foot">
+        <button class="logout" id="logoutBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
+      </div>
+    </aside>
+
+    <section class="content hidden-mobile" id="content">
+      <button class="icon-btn expand-btn" id="expandBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
+      <div class="tabs" id="tabs" style="display:none">
+        <button class="mobile-back" id="backBtn"></button>
+      </div>
+      <div class="view" id="view">
+        <div class="empty" id="emptyState"></div>
+        <iframe id="frame" class="hide"
+          sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
+          referrerpolicy="no-referrer"></iframe>
+        <pre class="src hide" id="srcView"></pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 新規/編集モーダル -->
+<div class="overlay" id="modal">
+  <div class="modal">
+    <h2 id="modalTitle"></h2>
+    <div class="modal-body">
+      <div class="field">
+        <label id="mTitleLabel"></label>
+        <input id="mTitle">
+      </div>
+      <div class="field">
+        <label id="mTagsLabel"></label>
+        <input id="mTags">
+      </div>
+      <div class="field">
+        <label id="mHtmlLabel"></label>
+        <textarea id="mHtml" placeholder="<!DOCTYPE html> ..."></textarea>
+      </div>
+      <div class="field">
+        <label id="mFileLabel"></label>
+        <input id="mFile" type="file" accept=".html,.htm,text/html" multiple>
+        <div class="muted" style="font-size:11px;margin-top:4px" id="mFileHint"></div>
+      </div>
+      <div class="err" id="modalErr"></div>
+    </div>
+    <div class="actions">
+      <button class="ghost" id="mCancel"></button>
+      <button class="primary" id="mSave"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// このマーカー行は Worker が DEMO_MODE のとき true に書き換えて配信する。編集しないこと。
+window.__HV_DEMO__ = false;
+
+const $ = (id) => document.getElementById(id);
+const DEMO = window.__HV_DEMO__ === true;
+let CSRF = null;
+let SNIPPETS = [];
+let SEARCH_RESULTS = null; // 非nullなら全文検索結果を表示中
+let SEARCH_Q = '';         // 現在の検索語 (ハイライト用)
+let currentId = null;
+let editingId = null;
+let restored = false; // 起動時の「最後のページ」自動復元を1回だけ行うためのフラグ
+
+// ---- localStorage helpers ----
+function lsGet(k){ try{ return localStorage.getItem(k); }catch{ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch{} }
+
+// ---- i18n (ランタイム切替。ビルド不要) --------------------------------------
+const I18N = {
+  en: {
+    docTitle: 'HTML Vault — Self-hosted HTML snippet vault',
+    loginTagline: 'Your self-hosted HTML snippet vault',
+    pwLabel: 'Password',
+    loginBtn: 'Log in',
+    closeMenu: 'Close menu',
+    openMenu: 'Open menu',
+    searchPlaceholder: 'Search (title / tags / body)',
+    newBtn: 'New snippet',
+    logout: 'Log out',
+    backToList: '← List',
+    emptyHint: 'Select an item from the list, or create a new one with ＋.',
+    modalNew: 'New snippet',
+    modalEdit: 'Edit',
+    fieldTitle: 'Title',
+    fieldTags: 'Tags (comma-separated)',
+    fieldHtml: 'HTML content',
+    fieldFile: 'Or load from file (.html, multiple allowed)',
+    fileHint: 'When multiple files are selected, each file name becomes the title. Files whose name matches an existing snippet are skipped to avoid duplicates.',
+    titlePlaceholder: 'e.g. flexbox centering',
+    tagsPlaceholder: 'e.g. css, layout',
+    cancel: 'Cancel',
+    save: 'Save',
+    noSnippets: 'No snippets yet',
+    bodyBadge: 'Body',
+    download: 'Download',
+    del: 'Delete',
+    untitled: 'Untitled',
+    confirmDelete: 'Delete "{title}"?\nThis cannot be undone.',
+    linkNotFound: 'Link target not found in the vault: {name}\n(Upload a snippet with the same title to enable navigation.)',
+    allSkipped: 'All {n} file(s) were skipped because snippets with the same name already exist.',
+    addedSkipped: 'Added {a} file(s). Skipped {n} file(s) because snippets with the same name already exist.',
+    errStatus: 'Error {s}',
+    demoText: 'Read-only demo',
+    demoLink: 'Deploy your own vault',
+    langToggle: '日本語',
+  },
+  ja: {
+    docTitle: 'HTML Vault — セルフホストHTMLスニペット保管庫',
+    loginTagline: 'セルフホストのHTMLスニペット保管庫',
+    pwLabel: 'パスワード',
+    loginBtn: 'ログイン',
+    closeMenu: 'メニューを閉じる',
+    openMenu: 'メニューを開く',
+    searchPlaceholder: '検索 (タイトル/タグ/本文)',
+    newBtn: '新規作成',
+    logout: 'ログアウト',
+    backToList: '← 一覧',
+    emptyHint: '左の一覧から選択するか、＋で新規作成してください。',
+    modalNew: '新規スニペット',
+    modalEdit: '編集',
+    fieldTitle: 'タイトル',
+    fieldTags: 'タグ (カンマ区切り)',
+    fieldHtml: 'HTML内容',
+    fieldFile: 'またはファイルから読み込み (.html・複数選択可)',
+    fileHint: '複数選択した場合は各ファイル名がタイトルになります。既存と同名のファイルは重複防止のためスキップされます。',
+    titlePlaceholder: '例: flexbox 中央寄せ',
+    tagsPlaceholder: '例: css, layout',
+    cancel: 'キャンセル',
+    save: '保存',
+    noSnippets: 'スニペットがありません',
+    bodyBadge: '本文',
+    download: 'ダウンロード',
+    del: '削除',
+    untitled: '無題',
+    confirmDelete: '「{title}」を削除しますか？\nこの操作は元に戻せません。',
+    linkNotFound: 'リンク先が Vault 内に見つかりません: {name}\n(同名タイトルでアップロードすると遷移できます)',
+    allSkipped: '{n}件すべて同名のスニペットが既にあるためスキップしました。',
+    addedSkipped: '{a}件を追加しました。{n}件は同名のスニペットが既にあるためスキップしました。',
+    errStatus: 'エラー {s}',
+    demoText: '閲覧専用デモ',
+    demoLink: '自分の Vault をデプロイ',
+    langToggle: 'EN',
+  },
+};
+// 初期言語: localStorage("hv_lang") → navigator.language が ja 始まりなら ja → それ以外は en
+let LANG = (function(){
+  const saved = lsGet('hv_lang');
+  if (saved === 'ja' || saved === 'en') return saved;
+  return String(navigator.language || '').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en';
+})();
+function t(key, vars){
+  let s = (I18N[LANG] && I18N[LANG][key]) != null ? I18N[LANG][key] : (I18N.en[key] != null ? I18N.en[key] : key);
+  if (vars) for (const k in vars) s = s.split('{'+k+'}').join(String(vars[k]));
+  return s;
+}
+function applyI18n(){
+  document.documentElement.lang = LANG;
+  document.title = t('docTitle');
+  $('loginTagline').textContent = t('loginTagline');
+  $('pwLabel').textContent = t('pwLabel');
+  $('loginBtn').textContent = t('loginBtn');
+  $('collapseBtn').title = t('closeMenu');
+  $('collapseBtn').setAttribute('aria-label', t('closeMenu'));
+  $('expandBtn').title = t('openMenu');
+  $('expandBtn').setAttribute('aria-label', t('openMenu'));
+  $('search').placeholder = t('searchPlaceholder');
+  $('newBtn').title = t('newBtn');
+  $('logoutBtn').title = t('logout');
+  $('logoutLabel').textContent = t('logout');
+  $('backBtn').textContent = t('backToList');
+  $('emptyState').textContent = t('emptyHint');
+  $('modalTitle').textContent = editingId ? t('modalEdit') : t('modalNew');
+  $('mTitleLabel').textContent = t('fieldTitle');
+  $('mTagsLabel').textContent = t('fieldTags');
+  $('mHtmlLabel').textContent = t('fieldHtml');
+  $('mFileLabel').textContent = t('fieldFile');
+  $('mFileHint').textContent = t('fileHint');
+  $('mTitle').placeholder = t('titlePlaceholder');
+  $('mTags').placeholder = t('tagsPlaceholder');
+  $('mCancel').textContent = t('cancel');
+  $('mSave').textContent = t('save');
+  $('demoText').textContent = t('demoText');
+  $('demoLink').textContent = t('demoLink');
+  const toggle = t('langToggle');
+  $('langBtnLogin').textContent = toggle;
+  $('langBtnApp').textContent = toggle;
+  renderList(); // 動的部分 (バッジ/ボタンtitle/空表示) も更新
+}
+function toggleLang(){
+  LANG = LANG === 'ja' ? 'en' : 'ja';
+  lsSet('hv_lang', LANG);
+  applyI18n();
+}
+
+// ---- 表示位置の記憶 (localStorage。端末ごとに独立して保持) ----
+const LS_LAST = 'hv:lastId';     // 最後に開いていたスニペットID
+const LS_SCROLL = 'hv:scroll';   // { [id]: scrollY } プレビューのスクロール位置
+function loadScroll(){ try{ return JSON.parse(lsGet(LS_SCROLL)||'{}')||{}; }catch{ return {}; } }
+let SCROLL = loadScroll();
+function saveScroll(){ lsSet(LS_SCROLL, JSON.stringify(SCROLL)); }
+
+// プレビュー iframe(sandbox)とのスクロール位置連携。
+// フレームは位置 {y} だけ通知し、どのスニペットかは親が把握する currentId に紐付けて保存する。
+window.addEventListener('message', (e)=>{
+  const f = $('frame');
+  if(!f || e.source !== f.contentWindow) return; // 表示中フレーム以外(切替直後の旧フレーム等)は無視
+  const d = e.data;
+  if(!d || !d.__hv) return;
+  if(d.ready){
+    // フレーム準備完了 → 保存済み位置を渡して復元させる
+    if(currentId) f.contentWindow.postMessage({ __hv_to:'frame', y: SCROLL[currentId]||0 }, '*');
+  } else if(typeof d.y === 'number' && currentId){
+    SCROLL[currentId] = d.y; saveScroll();
+  } else if(typeof d.nav === 'string'){
+    // プレビュー内の相対リンク (other.html) クリック → タイトル一致のスニペットに切り替える。
+    // sandbox iframe からの直接遷移は Cookie が付かないため、親が遷移を肩代わりする。
+    let name = d.nav.split('#')[0].split('?')[0];
+    try{ name = decodeURIComponent(name); }catch{}
+    const base = name.replace(/\.html?$/i,'').trim().toLowerCase();
+    const hit = SNIPPETS.filter(s=>(s.title||'').trim().toLowerCase()===base)
+      .sort((a,b)=>b.updated-a.updated)[0];
+    if(hit) openSnippet(hit.id);
+    else alert(t('linkNotFound', { name: d.nav }));
+  }
+});
+
+async function api(method, url, body, isForm){
+  const opts = { method, headers:{} };
+  if (CSRF && method !== 'GET') opts.headers['x-csrf-token'] = CSRF;
+  if (body && !isForm){ opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(body); }
+  if (body && isForm){ opts.body = body; }
+  const r = await fetch(url, opts);
+  const ct = r.headers.get('content-type')||'';
+  const data = ct.includes('application/json') ? await r.json() : await r.text();
+  // サーバーメッセージは英語固定。UI側はステータスコードで判定し、メッセージ文字列には依存しない。
+  if(!r.ok){ throw new Error((data && data.error) || t('errStatus', { s: r.status })); }
+  return data;
+}
+
+// ---- 認証 ----
+async function checkAuth(){
+  const me = await api('GET','/api/me');
+  if(me.authed){ CSRF = me.csrf; showApp(); }
+  else { $('loginView').classList.remove('hide'); $('appView').classList.add('hide'); }
+}
+async function login(){
+  $('loginErr').textContent='';
+  try{
+    const r = await api('POST','/api/login',{ password: $('pw').value });
+    CSRF = r.csrf; $('pw').value=''; showApp();
+  }catch(e){ $('loginErr').textContent = e.message; }
+}
+async function logout(){ try{ await api('POST','/api/logout'); }catch{} location.reload(); }
+
+function showApp(){
+  $('loginView').classList.add('hide');
+  $('appView').classList.remove('hide');
+  loadList();
+}
+
+// ---- 一覧 ----
+async function loadList(){
+  const r = await api('GET','/api/snippets');
+  CSRF = r.csrf || CSRF;
+  SNIPPETS = r.snippets;
+  renderList();
+  // 起動後に一度だけ、最後に開いていたページ(と位置)を復元する
+  if(!restored){
+    restored = true;
+    const lastId = lsGet(LS_LAST);
+    if(lastId && !currentId && SNIPPETS.some(s=>s.id===lastId)){
+      openSnippet(lastId); // 位置はフレーム ready 後に postMessage で復元
+    }
+  }
+}
+// 検索結果(サーバー)を表示中なら SEARCH_RESULTS を、未検索なら SNIPPETS を描画する。
+function renderList(){
+  const rows = SEARCH_RESULTS !== null ? SEARCH_RESULTS : SNIPPETS;
+  const list = $('list'); list.innerHTML='';
+  if(rows.length===0){
+    const d = document.createElement('div');
+    d.className = 'empty'; d.style.height = '120px';
+    d.textContent = t('noSnippets');
+    list.appendChild(d);
+    return;
+  }
+  for(const s of rows){
+    const div = document.createElement('div');
+    div.className = 'item'+(s.id===currentId?' active':'');
+    const tags = (s.tags||'').split(',').map(t=>t.trim()).filter(Boolean)
+      .map(t=>`<span class="tag">${esc(t)}</span>`).join(' ');
+    // 本文のみのヒットには「本文」バッジ＋抜粋を表示する。
+    const bodyBadge = (s.field==='body') ? `<span class="tag body">${esc(t('bodyBadge'))}</span>` : '';
+    const excerpt = s.excerpt ? `<div class="excerpt">${highlight(s.excerpt, SEARCH_Q)}</div>` : '';
+    div.innerHTML = `<button type="button" class="dl-item" title="${esc(t('download'))}" aria-label="${esc(t('download'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/></svg></button>
+      <button type="button" class="del-item" title="${esc(t('del'))}" aria-label="${esc(t('del'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
+      <div class="t">${esc(s.title)}</div>
+      <div class="meta"><span>${fmtDate(s.updated)}</span><span>${fmtBytes(s.bytes)}</span>${bodyBadge}${tags}</div>
+      ${excerpt}`;
+    div.querySelector('.dl-item').onclick = (e)=>{ e.stopPropagation(); downloadSnippet(s.id); };
+    div.querySelector('.del-item').onclick = (e)=>{ e.stopPropagation(); delById(s.id, s.title); };
+    div.onclick = ()=>openSnippet(s.id);
+    list.appendChild(div);
+  }
+}
+
+// 抜粋内の検索語を <mark> でハイライト (まず esc してから安全に置換)。
+function highlight(text, q){
+  const safe = esc(text);
+  const needle = (q||'').trim();
+  if(needle.length < 2) return safe;
+  const escQ = esc(needle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try{ return safe.replace(new RegExp(escQ, 'gi'), m=>`<mark>${m}</mark>`); }catch{ return safe; }
+}
+
+// ---- 表示 ----
+function openSnippet(id){
+  currentId = id;
+  lsSet(LS_LAST, id); // 「最後に開いたページ」を記憶
+  renderList();
+  $('emptyState').classList.add('hide');
+  // タブ枠はモバイルの「← 一覧」ボタン用途のみ。PCでは出さない。
+  $('tabs').style.display = window.matchMedia('(max-width:760px)').matches ? 'flex' : 'none';
+  showPreview();
+  // モバイル: コンテンツ表示
+  if(window.matchMedia('(max-width:760px)').matches){
+    $('content').classList.remove('hidden-mobile');
+    $('sidebar').classList.add('collapsed');
+  }
+}
+function showPreview(){
+  $('srcView').classList.add('hide');
+  const f = $('frame'); f.classList.remove('hide');
+  // プレビューは sandbox iframe。srcに同一オリジンのpreviewエンドポイントを指定。
+  f.src = '/api/snippets/'+currentId+'/preview';
+}
+
+// ---- 新規/編集 ----
+function openModal(edit){
+  editingId = edit ? currentId : null;
+  $('modalTitle').textContent = edit ? t('modalEdit') : t('modalNew');
+  $('modalErr').textContent='';
+  $('mFile').value='';
+  if(edit){
+    const s = SNIPPETS.find(x=>x.id===currentId);
+    $('mTitle').value = s.title||''; $('mTags').value = s.tags||'';
+    api('GET','/api/snippets/'+currentId+'/raw').then(t=>$('mHtml').value=t).catch(()=>{});
+  }else{
+    $('mTitle').value=''; $('mTags').value=''; $('mHtml').value='';
+  }
+  $('modal').classList.add('show');
+  document.body.classList.add('modal-open');
+}
+function closeModal(){ $('modal').classList.remove('show'); document.body.classList.remove('modal-open'); }
+
+async function save(){
+  $('modalErr').textContent='';
+  const files = $('mFile').files;
+  let added = 0, skipped = 0;
+  try{
+    if(editingId){
+      await api('PUT','/api/snippets/'+editingId, {
+        title: $('mTitle').value, tags: $('mTags').value, html: $('mHtml').value
+      });
+    } else if(files && files.length){
+      // 複数ファイル一括アップロード。フォルダ指定などで既存スニペットと同名(タイトル＝ファイル名)
+      // のファイルはスキップして、重複作成を防ぐ。
+      const single = files.length === 1;
+      const existing = new Set(SNIPPETS.map(s=>(s.title||'').trim().toLowerCase()));
+      for(const f of files){
+        const base = f.name.replace(/\.html?$/i,'');
+        // 単一: 入力タイトル優先(空ならファイル名)。複数: 各ファイル名をタイトルに。
+        const title = single ? ($('mTitle').value.trim() || base) : base;
+        const key = title.trim().toLowerCase();
+        if(key && existing.has(key)){ skipped++; continue; } // 同名は重複防止のためスキップ
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('title', title);
+        fd.append('tags', $('mTags').value);
+        await api('POST','/api/snippets', fd, true);
+        existing.add(key); // 同一バッチ内での重複も防ぐ
+        added++;
+      }
+      // 全ファイルが重複でスキップされた場合は、モーダルを閉じず理由を伝える
+      if(added===0 && skipped>0){
+        $('modalErr').textContent = t('allSkipped', { n: skipped });
+        return;
+      }
+    } else {
+      await api('POST','/api/snippets', {
+        title: $('mTitle').value, tags: $('mTags').value, html: $('mHtml').value
+      });
+    }
+    closeModal();
+    await loadList();
+    if(editingId && currentId) showPreview();
+    if(skipped>0) alert(t('addedSkipped', { a: added, n: skipped }));
+  }catch(e){ $('modalErr').textContent = e.message; }
+}
+
+async function delById(id, title){
+  if(!confirm(t('confirmDelete', { title: title || t('untitled') }))) return;
+  try{
+    await api('DELETE','/api/snippets/'+id);
+    if(SCROLL[id]!=null){ delete SCROLL[id]; saveScroll(); }
+    if(lsGet(LS_LAST)===id){ lsSet(LS_LAST,''); }
+    if(currentId===id){
+      currentId=null;
+      $('tabs').style.display='none';
+      $('frame').classList.add('hide'); $('frame').src='about:blank';
+      $('srcView').classList.add('hide');
+      $('emptyState').classList.remove('hide');
+      // モバイルでは一覧に戻す
+      $('content').classList.add('hidden-mobile');
+      $('sidebar').classList.remove('collapsed');
+    }
+    await loadList();
+  }catch(e){ alert(e.message); }
+}
+
+// ---- エクスポート (スニペットを1ファイルずつHTMLでダウンロード) ----
+// サーバーが Content-Disposition: attachment で返すので、スマホでもそのまま保存できる。
+function downloadSnippet(id){
+  const a = document.createElement('a');
+  a.href = '/api/snippets/'+id+'/download';
+  a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ---- ユーティリティ ----
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtDate(ms){ const d=new Date(ms); const p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+function fmtBytes(b){ if(b<1024) return b+'B'; if(b<1024*1024) return (b/1024).toFixed(1)+'KB'; return (b/1048576).toFixed(1)+'MB'; }
+
+// ---- イベント ----
+$('loginBtn').onclick = login;
+$('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
+$('logoutBtn').onclick = logout;
+$('langBtnLogin').onclick = toggleLang;
+$('langBtnApp').onclick = toggleLang;
+// ---- サイドバーの折りたたみ/展開 (状態は localStorage に記憶) ----
+const LS_SB = 'hv:sbCollapsed';
+function setSidebarCollapsed(c){ $('appView').classList.toggle('sb-collapsed', c); lsSet(LS_SB, c ? '1' : ''); }
+$('collapseBtn').onclick = ()=>setSidebarCollapsed(true);
+$('expandBtn').onclick = ()=>setSidebarCollapsed(false);
+if(lsGet(LS_SB)==='1') setSidebarCollapsed(true);
+// 検索: q が空なら全件、2文字以上ならサーバーで本文も含めて検索 (~200msデバウンス)。
+let searchTimer = null;
+async function runSearch(){
+  const q = $('search').value.trim();
+  SEARCH_Q = q;
+  if(q.length < 2){ SEARCH_RESULTS = null; renderList(); return; }
+  try{
+    const r = await api('GET','/api/search?q='+encodeURIComponent(q));
+    if($('search').value.trim() !== q) return; // 最新の入力語のみ採用
+    CSRF = r.csrf || CSRF;
+    SEARCH_RESULTS = r.results || [];
+    renderList();
+  }catch(e){
+    // 失敗時はクライアント側のタイトル/タグ絞り込みにフォールバック
+    const needle = q.toLowerCase();
+    SEARCH_RESULTS = SNIPPETS.filter(s=>
+      (s.title||'').toLowerCase().includes(needle) || (s.tags||'').toLowerCase().includes(needle)
+    ).map(s=>({ ...s, field:'title', excerpt:'' }));
+    renderList();
+  }
+}
+$('search').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 200); };
+$('newBtn').onclick = ()=>openModal(false);
+$('mCancel').onclick = closeModal;
+$('mSave').onclick = save;
+$('backBtn').onclick = ()=>{
+  $('content').classList.add('hidden-mobile');
+  $('sidebar').classList.remove('collapsed');
+};
+
+// ---- 起動 ----
+applyI18n();
+if(DEMO){
+  // 読み取り専用デモ: ログインをスキップして一覧を公開表示。
+  // 書き込み系UI (新規/削除/ログアウト) は CSS (.demo) で非表示、サーバー側でも 403 で拒否される。
+  document.body.classList.add('demo');
+  $('demoBanner').classList.remove('hide');
+  showApp();
+} else {
+  checkAuth();
+}
+</script>
+</body>
+</html>
