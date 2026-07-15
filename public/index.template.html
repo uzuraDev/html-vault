@@ -56,6 +56,7 @@
   .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
   .item:hover{background:var(--panel2)}
   .item.active{background:var(--panel2);border-left:3px solid var(--accent)}
+  .item.dragging{opacity:.45}
   .item .t{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:100px}
   .item .meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
   /* 行アクション (ピン/DL/削除): 通常は隠し、ホバー/選択時に右上へアイコン表示 */
@@ -294,6 +295,9 @@ function renderList(){
     div.querySelector('.dl-item').onclick = (e)=>{ e.stopPropagation(); downloadSnippet(s.id); };
     div.querySelector('.del-item').onclick = (e)=>{ e.stopPropagation(); delById(s.id, s.title); };
     div.onclick = ()=>openSnippet(s.id);
+    div.dataset.id = s.id;
+    // 並べ替えは通常一覧のみ (検索結果の並びはサーバー側の表示順なのでドラッグ対象外)
+    if(SEARCH_RESULTS === null) enableDrag(div, s);
     list.appendChild(div);
   }
 }
@@ -389,6 +393,64 @@ async function delById(id, title){
     }
     await loadList();
   }catch(e){ alert(e.message); }
+}
+
+// ---- ドラッグ&ドロップ並べ替え ----
+// ピン留めグループと非ピングループは別々に扱う: 同じグループの項目の上でだけ
+// ドロップを受け付ける(グループを跨ぐ移動は不可 = ピン状態はドラッグでは変わらない)。
+// ドラッグ中は DOM ノードを直接動かしてプレビューし、dragend で確定した表示順を
+// PUT /api/snippets/order に送って保存する。
+let dragEl = null, dragSnip = null, dragDirty = false;
+// スニペットのドラッグ中はドキュメント全体でドロップを「成立」として受け入れる。
+// 項目の上以外(隙間・ドラッグ中の要素自身・別グループ・プレビュー側)で離すと
+// ドロップ不成立(dropEffect=none)になり、ブラウザ標準の「残像が元の位置へ飛んで
+// 戻る」スナップバックアニメーションが再生されてしまうため。並びは dragover の
+// ライブプレビューで確定済みなので、どこで離しても成立扱いで問題ない。
+// (グループを跨ぐ移動の禁止は項目側 dragover の挿入ロジックで担保されている)
+document.addEventListener('dragover', (e)=>{
+  if(!dragEl) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+});
+document.addEventListener('drop', (e)=>{ if(dragEl) e.preventDefault(); });
+function enableDrag(div, s){
+  div.draggable = true;
+  div.addEventListener('dragstart', (e)=>{
+    dragEl = div; dragSnip = s; dragDirty = false;
+    div.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try{ e.dataTransfer.setData('text/plain', s.id); }catch{}
+  });
+  div.addEventListener('dragover', (e)=>{
+    if(!dragEl || dragEl === div) return;
+    if(!!dragSnip.pinned !== !!s.pinned) return; // グループを跨ぐドロップは受け付けない
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    // マウス位置が対象の上半分なら前へ、下半分なら後ろへ挿入 (ライブプレビュー)
+    const r = div.getBoundingClientRect();
+    const before = (e.clientY - r.top) < r.height / 2;
+    const parent = div.parentNode;
+    if(before && div.previousElementSibling !== dragEl){ parent.insertBefore(dragEl, div); dragDirty = true; }
+    else if(!before && div.nextElementSibling !== dragEl){ parent.insertBefore(dragEl, div.nextElementSibling); dragDirty = true; }
+  });
+  div.addEventListener('drop', (e)=>e.preventDefault());
+  div.addEventListener('dragend', ()=>{
+    div.classList.remove('dragging');
+    dragEl = null; dragSnip = null;
+    if(dragDirty){ dragDirty = false; persistOrder(); }
+  });
+}
+async function persistOrder(){
+  // DOM の並び (= ドロップ後の表示順) を確定順として全IDを送る
+  const ids = [...$('list').children].map(el=>el.dataset.id).filter(Boolean);
+  const pos = new Map(ids.map((id,i)=>[id,i]));
+  SNIPPETS.sort((a,b)=>(pos.get(a.id)??0)-(pos.get(b.id)??0));
+  try{
+    await api('PUT','/api/snippets/order', { ids });
+  }catch(e){
+    alert(e.message);
+    await loadList(); // 保存に失敗したらサーバー側の並びに戻す
+  }
 }
 
 // ---- ピン留め (幾つでも可。一覧の先頭に固定表示される) ----
