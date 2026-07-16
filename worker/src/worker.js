@@ -398,8 +398,8 @@ async function mcpDispatch(msg, env, origin) {
 }
 
 async function handleMcp(req, env, origin) {
-  if (req.method === 'GET') return new Response('Method Not Allowed', { status: 405 });
-  if (req.method !== 'POST') return new Response(null, { status: 405 });
+  if (req.method === 'GET') return new Response('Method Not Allowed', { status: 405, headers: SEC_HEADERS });
+  if (req.method !== 'POST') return new Response(null, { status: 405, headers: SEC_HEADERS });
 
   let body;
   try { body = await req.json(); } catch { return json(rpcError(null, -32700, 'Parse error')); }
@@ -408,7 +408,7 @@ async function handleMcp(req, env, origin) {
 
   // request(id付き)が1つも無い (= notification/response のみ) → 202 Accepted
   const hasRequest = msgs.some((m) => m && m.id !== undefined && m.id !== null && typeof m.method === 'string');
-  if (!hasRequest) return new Response(null, { status: 202 });
+  if (!hasRequest) return new Response(null, { status: 202, headers: SEC_HEADERS });
 
   const out = [];
   for (const m of msgs) {
@@ -514,6 +514,8 @@ export default {
       if (path === '/api/logout' && method === 'POST') {
         const sess = await requireAuth(req, env);
         if (!sess) return json({ error: 'Unauthorized.' }, 401);
+        // 状態変更(Cookie失効)なので他の変更系APIと同じくCSRFトークンを要求する
+        if (!(await csrfOk(req, sess, env))) return json({ error: 'Invalid CSRF token.' }, 403);
         return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', 0, secure) });
       }
 
@@ -633,11 +635,11 @@ export default {
       if (mDl && method === 'GET') {
         if (!demo) {
           const sess = await requireAuth(req, env);
-          if (!sess) return new Response('Unauthorized.', { status: 401 });
+          if (!sess) return new Response('Unauthorized.', { status: 401, headers: SEC_HEADERS });
         }
-        if (!validId(mDl[1])) return new Response('Invalid ID.', { status: 400 });
+        if (!validId(mDl[1])) return new Response('Invalid ID.', { status: 400, headers: SEC_HEADERS });
         const html = await env.VAULT.get('snip:' + mDl[1]);
-        if (html == null) return new Response('Not found.', { status: 404 });
+        if (html == null) return new Response('Not found.', { status: 404, headers: SEC_HEADERS });
         const list = await loadIndex(env);
         const meta = list.find((s) => s.id === mDl[1]);
         const name = downloadName(meta && meta.title);
@@ -654,8 +656,9 @@ export default {
       // ---- ページ配信 (/p/<タイトル>.html) ----
       // スニペット同士の相対リンクを機能させるための同一階層ルート。
       // タイトル(=アップロード時のファイル名ステム)で最新のスニペットを引いて返す。
-      // sandbox CSP で本体オリジンから隔離しつつ allow-top-navigation + SameSite=Lax Cookie で
-      // ページ間のトップレベル遷移を成立させる。認証はセッション or APIトークン (DEMO_MODE では公開)。
+      // sandbox CSP で本体オリジンから隔離しつつ allow-top-navigation-by-user-activation +
+      // SameSite=Lax Cookie でページ間のトップレベル遷移(ユーザー操作起点)を成立させる。
+      // 認証はセッション or APIトークン (DEMO_MODE では公開)。
       if (path.startsWith('/p/') && method === 'GET') {
         const htmlErr = (msg, status) =>
           new Response(
@@ -698,11 +701,11 @@ export default {
       if (mPrev && method === 'GET') {
         if (!demo) {
           const sess = await requireAuth(req, env);
-          if (!sess) return new Response('Unauthorized.', { status: 401 });
+          if (!sess) return new Response('Unauthorized.', { status: 401, headers: SEC_HEADERS });
         }
-        if (!validId(mPrev[1])) return new Response('Invalid ID.', { status: 400 });
+        if (!validId(mPrev[1])) return new Response('Invalid ID.', { status: 400, headers: SEC_HEADERS });
         const html = await env.VAULT.get('snip:' + mPrev[1]);
-        if (html == null) return new Response('Not found.', { status: 404 });
+        if (html == null) return new Response('Not found.', { status: 404, headers: SEC_HEADERS });
         // 注: /p/ と同じく SEC_HEADERS のアプリ用CSPは付けず、sandbox CSP で隔離する。
         return new Response(injectScrollScript(html), {
           headers: {

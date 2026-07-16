@@ -17,8 +17,9 @@ import { createInterface } from 'node:readline';
 const ITER = 100000;
 
 // Read the password via readline so no characters are lost or garbled.
-// (Input is echoed to the screen — local terminal only. What you type is exactly what gets stored.)
-function askHidden(query) {
+// Note: input IS echoed to the screen (local terminal only) — this is a plain
+// line prompt, not a hidden one. What you type is exactly what gets stored.
+function askLine(query) {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(query, (answer) => {
@@ -38,9 +39,9 @@ function argValue(flag) {
 }
 
 (async () => {
-  const p1 = await askHidden('New password: ');
+  const p1 = await askLine('New password: ');
   if (!p1 || p1.length < 8) { console.log('Use at least 8 characters.'); process.exit(1); }
-  const p2 = await askHidden('Type it again: ');
+  const p2 = await askLine('Type it again: ');
   if (p1 !== p2) { console.log('Passwords do not match.'); process.exit(1); }
   console.log(`(password length: ${p1.length} characters)`);
 

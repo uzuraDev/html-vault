@@ -340,6 +340,7 @@ function applyI18n(){
   $('expandBtn').setAttribute('aria-label', t('openMenu'));
   $('search').placeholder = t('searchPlaceholder');
   $('newBtn').title = t('newBtn');
+  $('newBtn').setAttribute('aria-label', t('newBtn')); // 表示は「＋」だけなのでSR向けの名前を付ける
   $('logoutBtn').title = t('logout');
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
