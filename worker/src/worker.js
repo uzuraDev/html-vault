@@ -146,6 +146,12 @@ function sanitizeText(s, max = 200) {
   return out.slice(0, max).trim();
 }
 function byteLen(s) { return enc.encode(s).length; }
+// HTMLに埋め込む文字列のエスケープ (エラーページ等、ユーザー入力を含み得る箇所で必須)
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+  );
+}
 // ダウンロード用ファイル名 (タイトル由来。OS禁止文字を置換し .html を付ける)
 function downloadName(title) {
   const s = sanitizeText(title, 100).replace(/[\\/:*?"<>|]/g, '_').trim();
@@ -488,6 +494,12 @@ export default {
       if (path === '/api/login' && method === 'POST') {
         const ip = req.headers.get('CF-Connecting-IP') || 'local';
         const rlKey = 'rl:' + ip;
+        // ベストエフォートのログイン試行スロットリング。KV の read-modify-write は非アトミック
+        // かつ結果整合のため、並行リクエストや複数 PoP 経由ではカウンタが過小計上され、10 回
+        // 上限を厳密には保証できない(TOCTOU)。パーソナルツール前提かつ実パスワード + PBKDF2
+        // (verifyPassword)で総当たり自体が高コストのため、ここでは軽い抑止に留める。厳密な保護が
+        // 必要なら Durable Object でカウンタをアトミック化するか、前段に Cloudflare Rate Limiting
+        // Rules を置くこと。
         const cnt = parseInt((await env.VAULT.get(rlKey)) || '0', 10);
         if (cnt >= 10) return json({ error: 'Too many login attempts. Try again later.' }, 429);
 
@@ -663,7 +675,8 @@ export default {
         const htmlErr = (msg, status) =>
           new Response(
             '<!doctype html><html lang="en"><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#333">' +
-              '<p>' + msg + '</p><p><a href="/">Open HTML Vault</a></p></body></html>',
+              // msg はデコード済みスラッグ等のユーザー入力を含み得るので必ずエスケープする
+              '<p>' + escapeHtml(msg) + '</p><p><a href="/">Open HTML Vault</a></p></body></html>',
             { status, headers: { 'Content-Type': 'text/html; charset=utf-8', ...SEC_HEADERS } }
           );
         if (!demo && !apiTokenOk(req, env)) {

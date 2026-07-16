@@ -8,7 +8,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "setpass": "node setpass.mjs",
-    "setpass:local": "node setpass.mjs --local"
+    "setpass:local": "node setpass.mjs --local",
+    "test": "node test/http-smoke.mjs"
   },
   "devDependencies": {
     "wrangler": "^4"

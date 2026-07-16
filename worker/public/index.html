@@ -39,7 +39,7 @@
   .demo-banner{padding:8px 14px;text-align:center;font-size:13px;background:#1d2735;border-bottom:1px solid var(--line);color:var(--txt)}
   .demo-banner a{color:var(--accent);text-decoration:none;font-weight:600}
   .demo-banner a:hover{text-decoration:underline}
-  body.demo #newBtn,body.demo .sidebar-foot,body.demo .del-item{display:none!important}
+  body.demo #newBtn,body.demo .sidebar-foot,body.demo .del-item,body.demo #editBtn{display:none!important}
 
   /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
   .sidebar-head{display:flex;align-items:center;gap:8px;padding:11px 12px 11px 14px;border-bottom:1px solid var(--line)}
@@ -83,13 +83,11 @@
   .item .excerpt{font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
   .item .excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
 
-  /* ビュー切替 */
+  /* 開いているスニペットのアクションバー (編集 / モバイルの「← 一覧」) */
   .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
   .tabs button{font-size:13px;padding:6px 12px}
-  .tabs button.on{background:var(--accent2);border-color:var(--accent2)}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
   iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0}
-  pre.src{flex:1;margin:0;overflow:auto;padding:14px;background:#0b0d11;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
   .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:24px}
 
   /* モーダル (ヘッダ / スクロールする本文 / 固定フッタ の3段。余分な余白を作らない) */
@@ -146,7 +144,7 @@
     </div>
     <p class="muted" id="loginTagline"></p>
     <div class="field">
-      <label id="pwLabel"></label>
+      <label for="pw" id="pwLabel"></label>
       <input id="pw" type="password" autocomplete="current-password" placeholder="••••••••">
     </div>
     <button class="primary" style="width:100%" id="loginBtn"></button>
@@ -178,13 +176,13 @@
       <button class="icon-btn expand-btn" id="expandBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
       <div class="tabs" id="tabs" style="display:none">
         <button class="mobile-back" id="backBtn"></button>
+        <button class="ghost" id="editBtn"></button>
       </div>
       <div class="view" id="view">
         <div class="empty" id="emptyState"></div>
-        <iframe id="frame" class="hide"
+        <iframe id="frame" class="hide" title="Preview"
           sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
           referrerpolicy="no-referrer"></iframe>
-        <pre class="src hide" id="srcView"></pre>
       </div>
     </section>
   </main>
@@ -196,19 +194,19 @@
     <h2 id="modalTitle"></h2>
     <div class="modal-body">
       <div class="field">
-        <label id="mTitleLabel"></label>
+        <label for="mTitle" id="mTitleLabel"></label>
         <input id="mTitle">
       </div>
       <div class="field">
-        <label id="mTagsLabel"></label>
+        <label for="mTags" id="mTagsLabel"></label>
         <input id="mTags">
       </div>
       <div class="field">
-        <label id="mHtmlLabel"></label>
+        <label for="mHtml" id="mHtmlLabel"></label>
         <textarea id="mHtml" placeholder="<!DOCTYPE html> ..."></textarea>
       </div>
       <div class="field">
-        <label id="mFileLabel"></label>
+        <label for="mFile" id="mFileLabel"></label>
         <input id="mFile" type="file" accept=".html,.htm,text/html" multiple>
         <div class="muted" style="font-size:11px;margin-top:4px" id="mFileHint"></div>
       </div>
@@ -251,6 +249,8 @@ const I18N = {
     openMenu: 'Open menu',
     searchPlaceholder: 'Search (title / tags / body)',
     newBtn: 'New snippet',
+    editBtn: 'Edit',
+    previewTitle: 'Preview',
     logout: 'Log out',
     backToList: '← List',
     emptyHint: 'Select an item from the list, or create a new one with ＋.',
@@ -288,6 +288,8 @@ const I18N = {
     openMenu: 'メニューを開く',
     searchPlaceholder: '検索 (タイトル/タグ/本文)',
     newBtn: '新規作成',
+    editBtn: '編集',
+    previewTitle: 'プレビュー',
     logout: 'ログアウト',
     backToList: '← 一覧',
     emptyHint: '左の一覧から選択するか、＋で新規作成してください。',
@@ -339,11 +341,14 @@ function applyI18n(){
   $('expandBtn').title = t('openMenu');
   $('expandBtn').setAttribute('aria-label', t('openMenu'));
   $('search').placeholder = t('searchPlaceholder');
+  $('search').setAttribute('aria-label', t('searchPlaceholder')); // placeholderはラベル代替にならないのでSR向け名を付与
   $('newBtn').title = t('newBtn');
   $('newBtn').setAttribute('aria-label', t('newBtn')); // 表示は「＋」だけなのでSR向けの名前を付ける
+  $('frame').setAttribute('title', t('previewTitle')); // iframeのアクセシブル名 (axe frame-title)
   $('logoutBtn').title = t('logout');
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
+  $('editBtn').textContent = t('editBtn');
   $('emptyState').textContent = t('emptyHint');
   $('modalTitle').textContent = editingId ? t('modalEdit') : t('modalNew');
   $('mTitleLabel').textContent = t('fieldTitle');
@@ -463,8 +468,8 @@ function renderList(){
   for(const s of rows){
     const div = document.createElement('div');
     div.className = 'item'+(s.id===currentId?' active':'');
-    const tags = (s.tags||'').split(',').map(t=>t.trim()).filter(Boolean)
-      .map(t=>`<span class="tag">${esc(t)}</span>`).join(' ');
+    const tags = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean)
+      .map(tag=>`<span class="tag">${esc(tag)}</span>`).join(' ');
     // 本文のみのヒットには「本文」バッジ＋抜粋を表示する。
     const bodyBadge = (s.field==='body') ? `<span class="tag body">${esc(t('bodyBadge'))}</span>` : '';
     const excerpt = s.excerpt ? `<div class="excerpt">${highlight(s.excerpt, SEARCH_Q)}</div>` : '';
@@ -495,8 +500,8 @@ function openSnippet(id){
   lsSet(LS_LAST, id); // 「最後に開いたページ」を記憶
   renderList();
   $('emptyState').classList.add('hide');
-  // タブ枠はモバイルの「← 一覧」ボタン用途のみ。PCでは出さない。
-  $('tabs').style.display = window.matchMedia('(max-width:760px)').matches ? 'flex' : 'none';
+  // アクションバー: PCでは編集ボタン、モバイルではそれに加え「← 一覧」ボタンを出す。
+  $('tabs').style.display = 'flex';
   showPreview();
   // モバイル: コンテンツ表示
   if(window.matchMedia('(max-width:760px)').matches){
@@ -505,7 +510,6 @@ function openSnippet(id){
   }
 }
 function showPreview(){
-  $('srcView').classList.add('hide');
   const f = $('frame'); f.classList.remove('hide');
   // プレビューは sandbox iframe。srcに同一オリジンのpreviewエンドポイントを指定。
   f.src = '/api/snippets/'+currentId+'/preview';
@@ -520,7 +524,7 @@ function openModal(edit){
   if(edit){
     const s = SNIPPETS.find(x=>x.id===currentId);
     $('mTitle').value = s.title||''; $('mTags').value = s.tags||'';
-    api('GET','/api/snippets/'+currentId+'/raw').then(t=>$('mHtml').value=t).catch(()=>{});
+    api('GET','/api/snippets/'+currentId+'/raw').then(raw=>$('mHtml').value=raw).catch(()=>{});
   }else{
     $('mTitle').value=''; $('mTags').value=''; $('mHtml').value='';
   }
@@ -584,7 +588,6 @@ async function delById(id, title){
       currentId=null;
       $('tabs').style.display='none';
       $('frame').classList.add('hide'); $('frame').src='about:blank';
-      $('srcView').classList.add('hide');
       $('emptyState').classList.remove('hide');
       // モバイルでは一覧に戻す
       $('content').classList.add('hidden-mobile');
@@ -644,6 +647,7 @@ async function runSearch(){
 }
 $('search').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 200); };
 $('newBtn').onclick = ()=>openModal(false);
+$('editBtn').onclick = ()=>openModal(true);
 $('mCancel').onclick = closeModal;
 $('mSave').onclick = save;
 $('backBtn').onclick = ()=>{
