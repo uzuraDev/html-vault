@@ -1,0 +1,26 @@
+# Local development variables for `wrangler dev`.
+# Copy this file to .dev.vars (gitignored) and fill in the values.
+
+# Required: secret used to sign session cookies. Any long random string, e.g.:
+#   openssl rand -hex 32
+SESSION_SECRET=replace-with-a-long-random-string
+
+# Required: PBKDF2 password hash. Do NOT write it by hand — run:
+#   npm run setpass:local
+# which appends the AUTH_HASH line to .dev.vars for you.
+# AUTH_HASH={"iter":100000,"salt":"...","hash":"..."}
+
+# Optional: Bearer token for headless API access (Authorization: Bearer <token>).
+# Leave unset to disable token auth.
+# API_TOKEN=
+
+# Optional: secret path segment for the remote MCP endpoint (POST /mcp/<value>).
+# Leave unset to disable the MCP endpoint.
+# MCP_SECRET_PATH=
+
+# Optional: contact for /.well-known/security.txt (RFC 9116). Include the scheme.
+# Unset = security.txt returns 404.
+# SECURITY_CONTACT=mailto:you@example.com
+
+# Optional: set to "1" to run as a read-only public demo (all writes return 403).
+# DEMO_MODE=0

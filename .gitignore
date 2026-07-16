@@ -3,3 +3,10 @@ data/
 .env
 # 言語別に生成されるため追跡しない（locales/ + index.template.html が原本）
 public/index.html
+
+# Cloudflare Workers 版 (worker/)
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars
+worker/seed-bulk.json
+worker/wrangler.demo.toml
