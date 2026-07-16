@@ -43,4 +43,9 @@ npm run dev                      # http://localhost:8787
 
 To seed a demo instance with sample pages, see `scripts/seed-demo.mjs` (seed a dedicated, empty demo namespace only).
 
+## Limitations
+
+- **Snippet metadata lives in a single KV `index` key**, updated read-modify-write. Workers KV has no transactions, so two writes landing at the same moment can drop one of them. This is a deliberate trade-off for a single-user personal vault — if you need multi-writer consistency, this design (and KV itself) is the wrong fit; Durable Objects or D1 would be the way to go.
+- KV is eventually consistent: a new snippet may take a few seconds to appear in the list on other edge locations.
+
 For full documentation (features, security model, Docker edition), see the [root README](../README.md).

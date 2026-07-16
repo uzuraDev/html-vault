@@ -223,6 +223,10 @@ function injectScrollScript(html) {
   if (i >= 0) return html.slice(0, i) + SCROLL_SCRIPT + html.slice(i);
   return html + SCROLL_SCRIPT;
 }
+// index は「読んで・直して・全体を書き戻す」方式。Workers KV にトランザクションは
+// ないため、同時書き込みが重なると後勝ちでメタデータが失われ得る。本アプリは
+// 単一ユーザーのパーソナルツールという前提でこの割り切りを採る (厳密な整合性が
+// 必要なら Durable Objects / D1 への置き換えが本筋)。README の Limitations も参照。
 async function loadIndex(env) {
   const v = await env.VAULT.get('index');
   if (!v) return [];
@@ -546,12 +550,16 @@ export default {
         for (const meta of list) {
           const inTitle = (meta.title || '').toLowerCase().includes(needle);
           const inTags = (meta.tags || '').toLowerCase().includes(needle);
+          // 本文の取得(KV読み + HTML→テキスト変換)はタイトル/タグ不一致のときだけ行う
           let bodyText = null;
-          if (validId(meta.id)) {
+          let inBody = false;
+          if (!inTitle && !inTags && validId(meta.id)) {
             const raw = await env.VAULT.get('snip:' + meta.id);
-            if (raw != null) bodyText = htmlToText(raw);
+            if (raw != null) {
+              bodyText = htmlToText(raw);
+              inBody = bodyText.toLowerCase().includes(needle);
+            }
           }
-          const inBody = !!(bodyText && bodyText.toLowerCase().includes(needle));
           if (!inTitle && !inTags && !inBody) continue;
           results.push({
             id: meta.id,
@@ -669,12 +677,18 @@ export default {
           .sort((a, b) => b.updated - a.updated)[0];
         const html = meta && validId(meta.id) ? await env.VAULT.get('snip:' + meta.id) : null;
         if (html == null) return htmlErr('"' + sanitizeText(slug, 100) + '" was not found in the vault.', 404);
+        // 注: SEC_HEADERS のアプリ用CSP(default-src 'self')は付けない。保存HTMLの
+        // 外部リソース読込を壊すため、隔離は sandbox CSP に任せる。
+        // allow-top-navigation-by-user-activation: リンククリック等の明示操作による
+        // ページ間遷移は許可しつつ、スクリプトによる自動リダイレクトは遮断する。
         return new Response(html, {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
+            'X-Content-Type-Options': 'nosniff',
             'X-Frame-Options': 'SAMEORIGIN',
+            'Referrer-Policy': 'no-referrer',
             'Content-Security-Policy':
-              'sandbox allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock allow-top-navigation',
+              'sandbox allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock allow-top-navigation-by-user-activation',
           },
         });
       }
@@ -689,10 +703,13 @@ export default {
         if (!validId(mPrev[1])) return new Response('Invalid ID.', { status: 400 });
         const html = await env.VAULT.get('snip:' + mPrev[1]);
         if (html == null) return new Response('Not found.', { status: 404 });
+        // 注: /p/ と同じく SEC_HEADERS のアプリ用CSPは付けず、sandbox CSP で隔離する。
         return new Response(injectScrollScript(html), {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
+            'X-Content-Type-Options': 'nosniff',
             'X-Frame-Options': 'SAMEORIGIN',
+            'Referrer-Policy': 'no-referrer',
             'Content-Security-Policy':
               'sandbox allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock',
           },
