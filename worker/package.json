@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "HTML Vault — self-hosted HTML snippet vault on Cloudflare Workers + KV",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

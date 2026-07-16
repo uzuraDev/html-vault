@@ -5,7 +5,9 @@
  * developer's worker/.dev.vars, then for each phase it writes a phase-specific
  * .dev.vars, spawns `wrangler dev` (isolated --persist-to so it never touches your
  * real local KV / rate-limit state), waits for /api/me, runs the phase's assertions,
- * and kills the server. On exit the original .dev.vars is always restored.
+ * and kills the server. The original .dev.vars is restored on normal exit and on
+ * SIGINT/SIGTERM (Ctrl+C); a hard kill (SIGKILL) or power loss can still leave the
+ * phase-specific .dev.vars in place — re-running the test overwrites it cleanly.
  *
  * Phases:
  *   1. normal    — SESSION_SECRET + AUTH_HASH + MCP_SECRET_PATH (no DEMO, no SECURITY_CONTACT)
@@ -120,13 +122,14 @@ let child = null;
 function killWrangler() {
   if (child && child.pid) {
     try {
+      // Kill the whole spawned process tree by PID (this reaches the child workerd
+      // too). We deliberately do NOT `taskkill /IM workerd.exe`: that would kill
+      // every workerd on the machine, including other projects' dev servers.
       if (IS_WIN) spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' });
       else process.kill(-child.pid, 'SIGKILL');
     } catch { /* ignore */ }
   }
   child = null;
-  // Belt-and-suspenders: kill any lingering local runtime holding the port.
-  if (IS_WIN) spawnSync('taskkill', ['/F', '/IM', 'workerd.exe'], { stdio: 'ignore' });
 }
 async function startWrangler() {
   const args = [
@@ -518,6 +521,22 @@ async function main() {
     failures: results.filter((x) => !x.pass).map((x) => ({ name: x.name, expected: x.expected, actual: x.actual })),
   }));
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// Restore .dev.vars and kill the dev server on Ctrl+C / termination signals,
+// not just on normal exit, so an interrupted run doesn't leave a phase-specific
+// .dev.vars behind.
+let cleanedUp = false;
+function cleanupOnSignal(signal) {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  try { killWrangler(); } catch { /* ignore */ }
+  try { restoreVars(); } catch { /* ignore */ }
+  console.log(`\nInterrupted by ${signal}; .dev.vars restored.`);
+  process.exit(130);
+}
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => cleanupOnSignal(sig));
 }
 
 main().catch((e) => {
