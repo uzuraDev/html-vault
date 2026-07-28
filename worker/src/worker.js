@@ -179,16 +179,56 @@ function htmlToText(html) {
     .trim();
 }
 
-// text 内の最初の needle(小文字化済み) 周辺を抜き出して抜粋を作る。
-function makeExcerpt(text, lowerNeedle) {
-  const idx = text.toLowerCase().indexOf(lowerNeedle);
-  if (idx === -1) return '';
+// text の idx 位置(一致開始点)の周辺を抜き出して抜粋を作る。
+// 一致位置は呼び出し側が lower.indexOf で既に求めているので、ここでは再走査しない。
+function makeExcerpt(text, idx, needleLen) {
   const start = Math.max(0, idx - SEARCH_EXCERPT_RADIUS);
-  const end = Math.min(text.length, idx + lowerNeedle.length + SEARCH_EXCERPT_RADIUS);
+  const end = Math.min(text.length, idx + needleLen + SEARCH_EXCERPT_RADIUS);
   let ex = text.slice(start, end);
   if (start > 0) ex = '…' + ex;
   if (end < text.length) ex = ex + '…';
   return ex;
+}
+
+// ---- 本文テキストのキャッシュ (アイソレート内) -----------------------------
+// 検索は本文が要るスニペットぶんだけ KV を読むが、KV の read は1件ずつが往復なので
+// 件数が増えるとそのまま待ち時間になる。正規化済みテキストをアイソレートに持たせて
+// 2回目以降は KV 読み込みごと省く (Workers のアイソレートはリクエストを跨いで生きる)。
+// KV には mtime が無いので、index のメタ (updated/bytes) を版として使う。
+// PUT は必ず updated を進めるため、本文が変わったスニペットは自動で作り直される。
+// アイソレートのメモリ上限 (128MB) に対して十分小さい範囲でしか保持しない。
+const SEARCH_CACHE_MAX_CHARS = 4 * 1024 * 1024; // text+lower 合計。実メモリで約8MB
+const searchTextCache = new Map(); // id -> { ver, text, lower }
+let searchCacheChars = 0;
+// KV の同時読み込み数。逐次 await だと「件数 × 1往復」を直列に待つことになる。
+const KV_READ_CONCURRENCY = 12;
+
+function dropSearchText(id) {
+  const e = searchTextCache.get(id);
+  if (!e) return;
+  searchCacheChars -= e.text.length + e.lower.length;
+  searchTextCache.delete(id);
+}
+
+// meta の本文を正規化済みで返す { text, lower }。KV に無ければ null。
+async function getSearchText(env, meta) {
+  const ver = meta.updated + ':' + meta.bytes;
+  const hit = searchTextCache.get(meta.id);
+  if (hit && hit.ver === ver) return hit;
+  const raw = await env.VAULT.get('snip:' + meta.id);
+  if (raw == null) {
+    dropSearchText(meta.id);
+    return null;
+  }
+  const text = htmlToText(raw);
+  const entry = { ver, text, lower: text.toLowerCase() };
+  dropSearchText(meta.id); // 古い版が居たら先に外して枠を空ける
+  const cost = entry.text.length + entry.lower.length;
+  if (searchCacheChars + cost <= SEARCH_CACHE_MAX_CHARS) {
+    searchTextCache.set(meta.id, entry);
+    searchCacheChars += cost;
+  }
+  return entry; // 入らなくても今回の検索には使う
 }
 
 // プレビューに注入するスクロール位置の記憶/復元スクリプト。
@@ -560,31 +600,45 @@ export default {
         }
         const needle = q.toLowerCase();
         const list = (await loadIndex(env)).sort((a, b) => b.updated - a.updated);
+        // まずメタだけで判定し、本文の取得(KV読み + HTML→テキスト変換)が要るものを集める。
+        const rows = list.map((meta) => ({
+          meta,
+          inTitle: (meta.title || '').toLowerCase().includes(needle),
+          inTags: (meta.tags || '').toLowerCase().includes(needle),
+          body: null,
+        }));
+        const needBody = rows.filter((r) => !r.inTitle && !r.inTags && validId(r.meta.id));
+        // 本文はまとめて並行取得する。1件ずつ await すると件数分の往復を直列に待つことになる。
+        // (KV への read 回数は従来と同じ = サブリクエスト上限への影響は変わらない)
+        for (let i = 0; i < needBody.length; i += KV_READ_CONCURRENCY) {
+          await Promise.all(
+            needBody.slice(i, i + KV_READ_CONCURRENCY).map(async (r) => {
+              r.body = await getSearchText(env, r.meta);
+            })
+          );
+        }
         const results = [];
-        for (const meta of list) {
-          const inTitle = (meta.title || '').toLowerCase().includes(needle);
-          const inTags = (meta.tags || '').toLowerCase().includes(needle);
-          // 本文の取得(KV読み + HTML→テキスト変換)はタイトル/タグ不一致のときだけ行う
-          let bodyText = null;
-          let inBody = false;
-          if (!inTitle && !inTags && validId(meta.id)) {
-            const raw = await env.VAULT.get('snip:' + meta.id);
-            if (raw != null) {
-              bodyText = htmlToText(raw);
-              inBody = bodyText.toLowerCase().includes(needle);
-            }
-          }
-          if (!inTitle && !inTags && !inBody) continue;
+        const seen = new Set();
+        for (const r of rows) {
+          seen.add(r.meta.id);
+          const idx = r.body ? r.body.lower.indexOf(needle) : -1;
+          const inBody = idx !== -1;
+          if (!r.inTitle && !r.inTags && !inBody) continue;
           results.push({
-            id: meta.id,
-            title: meta.title,
-            tags: meta.tags,
-            created: meta.created,
-            updated: meta.updated,
-            bytes: meta.bytes,
-            field: inTitle ? 'title' : inTags ? 'tags' : 'body',
-            excerpt: inBody ? makeExcerpt(bodyText, needle) : '',
+            id: r.meta.id,
+            title: r.meta.title,
+            tags: r.meta.tags,
+            created: r.meta.created,
+            updated: r.meta.updated,
+            bytes: r.meta.bytes,
+            field: r.inTitle ? 'title' : r.inTags ? 'tags' : 'body',
+            excerpt: inBody ? makeExcerpt(r.body.text, idx, needle.length) : '',
           });
+        }
+        // index から消えた id のキャッシュを解放する (削除・再インポート等で
+        // 掃除されないまま残ると、上限を占めて以後どれもキャッシュに入らなくなる)。
+        for (const id of searchTextCache.keys()) {
+          if (!seen.has(id)) dropSearchText(id);
         }
         return json({ results, q, csrf });
       }
