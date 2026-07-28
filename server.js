@@ -66,6 +66,15 @@ const API_TOKEN = process.env.API_TOKEN ? String(process.env.API_TOKEN) : '';
 //    到達可能にする必要がある (localhost / LAN内 / VPN内では繋がらない)。
 const MCP_SECRET_PATH = process.env.MCP_SECRET_PATH ? String(process.env.MCP_SECRET_PATH) : '';
 
+// 数値の環境変数を読む。未設定・空文字・空白のみ・数値でない場合は既定値に倒す。
+// (`.env` に `NAME=` の行があるだけで 0 として扱われる事故を避ける)
+// 0 を有効値として受けるので、0 を不正扱いする MAX_UPLOAD_MB は従来式のまま据え置く。
+function envNumber(raw, fallback) {
+  if (raw == null || String(raw).trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 // ---- 初期化 --------------------------------------------------------------
 for (const dir of [DATA_DIR, SNIPPET_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -89,15 +98,60 @@ function ensureInitialAuth() {
 }
 ensureInitialAuth();
 
-function loadIndex() {
+// ファイルが差し替わったかを stat で判定するための鍵。
+// mtime だけだと tar でのバックアップ復元 (mtime を復元する) をすり抜けうるので、
+// ファイルの置き換え・書き込みで必ず動く ctime も見る。それでも「同一 stat のまま
+// 中身だけ変える」ような書き換えは検知できないため、更新系のハンドラでは
+// キャッシュを明示的に破棄している。
+function statKey(st) {
+  return st ? st.mtimeMs + ':' + st.ctimeMs + ':' + st.size : null;
+}
+function statKeyOf(file) {
   try {
-    return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+    return statKey(fs.statSync(file));
   } catch {
-    return [];
+    return null;
   }
 }
+
+// index.json のパース結果をメモリに保持する。検索は 1 キーストロークごとに
+// loadIndex() を呼ぶため、毎回 read + JSON.parse するとそれだけで無駄が大きい。
+// stat が一致する間だけ再利用するので、外部プロセス (バックアップ復元や別インスタンス)
+// が index.json を差し替えた場合は読み直す。
+let indexCache = null; // { key, list }
+function loadIndex() {
+  const key = statKeyOf(INDEX_FILE);
+  if (indexCache && key && indexCache.key === key) {
+    // 呼び出し側が sort/push/splice で書き換えるので、配列自体は複製して渡す
+    // (要素オブジェクトは共有。更新系は必ず saveIndex まで通す作りなので問題ない)。
+    return indexCache.list.slice();
+  }
+  let list;
+  try {
+    list = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+  } catch {
+    indexCache = null;
+    return [];
+  }
+  if (!Array.isArray(list)) {
+    indexCache = null;
+    return [];
+  }
+  indexCache = key ? { key, list: list.slice() } : null;
+  return list;
+}
 function saveIndex(list) {
-  fs.writeFileSync(INDEX_FILE, JSON.stringify(list, null, 2));
+  try {
+    fs.writeFileSync(INDEX_FILE, JSON.stringify(list, null, 2));
+  } catch (e) {
+    // 書き込みに失敗したらディスクは元のまま。呼び出し側は meta を書き換えた後なので、
+    // キャッシュを無効にして「保存されていない値」を返し続けないようにする。
+    indexCache = null;
+    throw e;
+  }
+  // 書いた直後の stat を覚えておく (次の loadIndex を再パースなしで通すため)。
+  const key = statKeyOf(INDEX_FILE);
+  indexCache = key ? { key, list: list.slice() } : null;
 }
 function loadAuth() {
   if (!fs.existsSync(AUTH_FILE)) return null;
@@ -509,6 +563,11 @@ const SEARCH_EXCERPT_RADIUS = 60; // マッチ前後に確保する文字数 (�
 
 // HTMLからプレーンテキストを作る (依存を増やさず手書き)。
 // script/style の中身を除去 → タグ除去 → 主要エンティティを軽く復元 → 空白圧縮。
+// ここは意図的に手を入れていない。パス数を減らす書き換えをいくつか試したが、
+//  - 除去系を1本のオルタネーションに畳むと、コメントとタグが交差する入力で結果が変わる
+//  - unrolled loop 形にすると閉じない <script> が連続する入力で最大17倍遅くなる
+//  - エンティティ復元をコールバック1本に畳むと、エンティティが密な入力でむしろ遅い
+// いずれも実測で確認した。速度は呼び出し回数を減らすこと (下のキャッシュ) で稼ぐ。
 function htmlToText(html) {
   return String(html == null ? '' : html)
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -525,12 +584,67 @@ function htmlToText(html) {
     .trim();
 }
 
-// text 内の最初の q (小文字化済み needle) の周辺を抜き出して抜粋を作る。
-function makeExcerpt(text, lowerNeedle) {
-  const idx = text.toLowerCase().indexOf(lowerNeedle);
-  if (idx === -1) return '';
+// ---- 本文テキストのキャッシュ --------------------------------------------
+// 検索は毎リクエストで全スニペットHTMLを読み直し htmlToText に通していた
+// (200件/25MiB で p50 約260ms)。正規化済みテキストを id ごとに持ち、
+// stat (statKey) が一致する間だけ再利用する。ファイル読み込みと正規表現が
+// 「変更されたスニペットの初回だけ」に減る。
+// 検証に stat を使うので、外部プロセスが data/ を差し替えても (バックアップ復元等)
+// 次の検索で読み直される。それでもすり抜ける書き換えに備えて、
+// 更新/削除の各ハンドラでも明示的に破棄する。
+// メモリは文字数で上限を設ける (SEARCH_CACHE_MB、既定64MB。0で実質無効)。
+// 上限に達したら「入らない分はキャッシュしない」= 先に入ったものを保持する。
+// LRU にすると、検索が毎回すべてのスニペットを同じ順に走査する都合上
+// 「次に必要になるものから捨てる」形になりヒット率がほぼ0に落ちるため。
+// (総量が上限を超える環境では、先頭から入る分だけが速くなり、残りは従来どおり)
+const SEARCH_CACHE_MB = envNumber(process.env.SEARCH_CACHE_MB, 64);
+// V8 は非Latin1文字列を2バイト/文字で保持するので、1MB ≒ 512K文字と見積もる。
+// (text と lower の2本を保持するので、実メモリはおおむねこの見積り通りになる)
+const SEARCH_CACHE_MAX_CHARS = Math.floor(SEARCH_CACHE_MB * 512 * 1024);
+const searchCache = new Map(); // id -> { key, text, lower }
+let searchCacheChars = 0;
+
+function dropSearchCache(id) {
+  const e = searchCache.get(id);
+  if (!e) return;
+  searchCacheChars -= e.text.length + e.lower.length;
+  searchCache.delete(id);
+}
+
+// id の本文を正規化済みで返す { text, lower }。ファイルが無い/読めないときは null。
+function getSearchText(id) {
+  const file = snippetPath(id);
+  if (!file) return null; // id が不正 (パストラバーサル防止は snippetPath 側)
+  const key = statKeyOf(file);
+  if (!key) {
+    dropSearchCache(id); // ファイルが消えていたらキャッシュも捨てる
+    return null;
+  }
+  const hit = searchCache.get(id);
+  if (hit && hit.key === key) return hit;
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    dropSearchCache(id);
+    return null;
+  }
+  const text = htmlToText(raw);
+  const entry = { key, text, lower: text.toLowerCase() };
+  dropSearchCache(id); // 古い版が居たら先に外して枠を空ける
+  const cost = entry.text.length + entry.lower.length;
+  if (searchCacheChars + cost <= SEARCH_CACHE_MAX_CHARS) {
+    searchCache.set(id, entry);
+    searchCacheChars += cost;
+  }
+  return entry; // 入らなくても今回の検索には使う
+}
+
+// text の idx 位置 (一致開始点) の周辺を抜き出して抜粋を作る。
+// 一致位置は呼び出し側が lower.indexOf で既に求めているので、ここでは再走査しない。
+function makeExcerpt(text, idx, needleLen) {
   const start = Math.max(0, idx - SEARCH_EXCERPT_RADIUS);
-  const end = Math.min(text.length, idx + lowerNeedle.length + SEARCH_EXCERPT_RADIUS);
+  const end = Math.min(text.length, idx + needleLen + SEARCH_EXCERPT_RADIUS);
   let ex = text.slice(start, end);
   if (start > 0) ex = '…' + ex;
   if (end < text.length) ex = ex + '…';
@@ -544,42 +658,50 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
     return res.json({ results: [], q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
   }
   const needle = q.toLowerCase();
-  const list = loadIndex().sort(byDisplayOrder);
-  const results = [];
+  const list = loadIndex();
+  const hits = []; // { meta, field, excerpt }
+  const seen = new Set(); // 走査した id (キャッシュの掃除に使う)
   for (const meta of list) {
-    const title = (meta.title || '').toLowerCase();
-    const tags = (meta.tags || '').toLowerCase();
-    const inTitle = title.includes(needle);
-    const inTags = tags.includes(needle);
+    seen.add(meta.id);
+    const inTitle = (meta.title || '').toLowerCase().includes(needle);
+    // field はタイトル優先なので、タイトルで確定していればタグは見なくてよい。
+    const inTags = !inTitle && (meta.tags || '').toLowerCase().includes(needle);
 
-    // 本文は必要時のみ読む。ファイル欠損は無視してメタのみで判定する。
-    let bodyText = null;
-    const file = snippetPath(meta.id);
-    if (file && fs.existsSync(file)) {
-      try {
-        bodyText = htmlToText(fs.readFileSync(file, 'utf8'));
-      } catch {
-        bodyText = null;
-      }
-    }
-    const inBody = !!(bodyText && bodyText.toLowerCase().includes(needle));
+    // 本文はキャッシュ経由で読む (ファイル欠損は無視してメタのみで判定)。
+    // タイトル/タグでヒットしていても、本文にも語があれば抜粋を出す
+    // — これは元からの挙動なので変えない。一致位置はここで1回だけ求め、
+    // 抜粋生成側では再走査しない。
+    const entry = getSearchText(meta.id);
+    const idx = entry ? entry.lower.indexOf(needle) : -1;
 
-    if (!inTitle && !inTags && !inBody) continue;
+    if (!inTitle && !inTags && idx === -1) continue;
 
     const field = inTitle ? 'title' : inTags ? 'tags' : 'body';
-    const excerpt = inBody ? makeExcerpt(bodyText, needle) : '';
-    results.push({
-      id: meta.id,
-      title: meta.title,
-      tags: meta.tags,
-      created: meta.created,
-      updated: meta.updated,
-      bytes: meta.bytes,
-      pinned: !!meta.pinned,
-      field,
-      excerpt,
-    });
+    const excerpt = idx === -1 ? '' : makeExcerpt(entry.text, idx, needle.length);
+    hits.push({ meta, field, excerpt });
   }
+  // index から消えた id のキャッシュを解放する。
+  // 更新/削除ハンドラを通らない消え方 (data/ を丸ごと差し替えるバックアップ復元や
+  // 再インポート) があるため、ここで掃除しないと死んだテキストが上限を占め続け、
+  // 以後どのスニペットもキャッシュに入れなくなる (再起動するまで直らない)。
+  for (const id of searchCache.keys()) {
+    if (!seen.has(id)) dropSearchCache(id);
+  }
+  // 並べ替えは絞り込みの後に行う (全件ではなくヒット分だけ)。
+  // ソートは必ず meta 実体に対して行うこと — order を持つのは meta 側なので、
+  // 整形後のオブジェクトを並べると手動並べ替え (D&D) が検索結果で無視される。
+  hits.sort((a, b) => byDisplayOrder(a.meta, b.meta));
+  const results = hits.map(({ meta, field, excerpt }) => ({
+    id: meta.id,
+    title: meta.title,
+    tags: meta.tags,
+    created: meta.created,
+    updated: meta.updated,
+    bytes: meta.bytes,
+    pinned: !!meta.pinned,
+    field,
+    excerpt,
+  }));
   res.json({ results, q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
 });
 
@@ -685,6 +807,10 @@ app.put('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
       return res.status(413).json({ error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB) });
     }
     fs.writeFileSync(file, req.body.html, 'utf8');
+    // 本文が変わったら検索用テキストのキャッシュを捨てる。
+    // (stat 検証もあるが、mtime の分解能が粗い環境で「同一秒・同一サイズ」の
+    //  上書きをすり抜けるため、書き込み側でも必ず落とす。空文字での更新も同様。)
+    dropSearchCache(req.params.id);
     meta.bytes = Buffer.byteLength(req.body.html, 'utf8');
     contentChanged = true;
   }
@@ -710,6 +836,7 @@ app.delete('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
   if (idx === -1) return res.status(404).json({ error: STR.notFound });
   const file = snippetPath(req.params.id);
   if (file && fs.existsSync(file)) fs.unlinkSync(file);
+  dropSearchCache(req.params.id); // 削除済みが検索にヒットし続けないように
   list.splice(idx, 1);
   saveIndex(list);
   res.json({ ok: true });

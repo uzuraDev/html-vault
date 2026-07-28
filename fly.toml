@@ -20,6 +20,7 @@ primary_region = "nrt"   # 東京。最寄りリージョンに変更可
   DATA_DIR = "/data"
   BEHIND_HTTPS = "1"     # Fly が TLS 終端するため Secure Cookie を有効化
   MAX_UPLOAD_MB = "10"
+  SEARCH_CACHE_MB = "64" # 全文検索キャッシュのメモリ上限（保管量が多いなら増やす）
 
 # データ永続化ボリューム（事前に `fly volumes create html_vault_data` が必要）
 [mounts]
