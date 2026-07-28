@@ -405,11 +405,12 @@ window.addEventListener('message', (e)=>{
   }
 });
 
-async function api(method, url, body, isForm){
+async function api(method, url, body, isForm, signal){
   const opts = { method, headers:{} };
   if (CSRF && method !== 'GET') opts.headers['x-csrf-token'] = CSRF;
   if (body && !isForm){ opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(body); }
   if (body && isForm){ opts.body = body; }
+  if (signal) opts.signal = signal; // 検索の打ち切り用 (AbortController)
   const r = await fetch(url, opts);
   const ct = r.headers.get('content-type')||'';
   const data = ct.includes('application/json') ? await r.json() : await r.text();
@@ -626,17 +627,29 @@ $('expandBtn').onclick = ()=>setSidebarCollapsed(false);
 if(lsGet(LS_SB)==='1') setSidebarCollapsed(true);
 // 検索: q が空なら全件、2文字以上ならサーバーで本文も含めて検索 (~200msデバウンス)。
 let searchTimer = null;
+let searchAbort = null; // 進行中の検索リクエスト
+let searchSeq = 0;      // 発行順。古い応答が後勝ちで上書きするのを防ぐ
 async function runSearch(){
   const q = $('search').value.trim();
   SEARCH_Q = q;
+  // 発行番号は必ず先に進める (2文字未満で抜ける場合も。進めないと AbortController が
+  // 無い環境で「遅れて届いた古い応答」が全件表示を上書きしてしまう)。
+  const seq = ++searchSeq;
+  if(searchAbort) searchAbort.abort(); // 前の検索を打ち切る (サーバ側の無駄な走査も止まる)
+  searchAbort = null;
   if(q.length < 2){ SEARCH_RESULTS = null; renderList(); return; }
+  const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  searchAbort = ctl;
   try{
-    const r = await api('GET','/api/search?q='+encodeURIComponent(q));
-    if($('search').value.trim() !== q) return; // 最新の入力語のみ採用
+    const r = await api('GET','/api/search?q='+encodeURIComponent(q), null, false, ctl && ctl.signal);
+    if(seq !== searchSeq) return; // 最後に発行した検索の結果のみ採用
     CSRF = r.csrf || CSRF;
     SEARCH_RESULTS = r.results || [];
     renderList();
   }catch(e){
+    // 自分で打ち切ったものは失敗ではないので、フォールバックさせない。
+    if(e && e.name === 'AbortError') return;
+    if(seq !== searchSeq) return;
     // 失敗時はクライアント側のタイトル/タグ絞り込みにフォールバック
     const needle = q.toLowerCase();
     SEARCH_RESULTS = SNIPPETS.filter(s=>
