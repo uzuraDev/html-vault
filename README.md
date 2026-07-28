@@ -155,6 +155,7 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 | `BEHIND_HTTPS` | `0` | Set `1` behind a TLS-terminating proxy (enables Secure cookies) |
 | `DATA_DIR` | `/data` / `./data` (Node) | Data directory |
 | `MAX_UPLOAD_MB` | `10` | Max HTML size (MB) |
+| `SEARCH_CACHE_MB` | `64` | Memory budget for the full-text search cache. Snippet text is parsed once and reused, so repeat searches skip re-reading every file. Raise it if your vault's total text exceeds the budget; `0` effectively disables the cache |
 | `AUTH_PASSWORD` | unset | First-login password (or run `setpass.js`). Used only until `auth.json` exists |
 | `APP_LANG` | `en` | UI/message language (`en`/`ja`), applied at build time |
 | `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [stdio MCP server](#mcp-integration-headless-upload). |

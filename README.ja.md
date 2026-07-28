@@ -155,6 +155,7 @@ UI とサーバメッセージはビルド時に焼き込まれます（ラン�
 | `BEHIND_HTTPS` | `0` | TLS 終端プロキシ背後なら `1`（Secure Cookie 有効化） |
 | `DATA_DIR` | `/data` / `./data`（Node） | データ保存先 |
 | `MAX_UPLOAD_MB` | `10` | HTML 最大サイズ(MB) |
+| `SEARCH_CACHE_MB` | `64` | 全文検索キャッシュのメモリ上限。本文のテキスト化を1回だけ行って再利用するため、2回目以降の検索が全ファイル読み直しを避けられます。保管量がこの上限を超えるなら増やしてください。`0` で実質無効 |
 | `AUTH_PASSWORD` | 未設定 | 初回ログインのパスワード（または `setpass.js`）。`auth.json` 生成までのみ使用 |
 | `APP_LANG` | `en` | UI/メッセージ言語（`en`/`ja`）。ビルド時に適用 |
 | `API_TOKEN` | 未設定（無効） | ヘッドレスAPI用の Bearer トークン（`POST`/`GET /api/snippets`）。[stdio MCPサーバ](#mcp-連携ヘッドレスアップロード)を有効化 |

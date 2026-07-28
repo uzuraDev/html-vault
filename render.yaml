@@ -26,6 +26,8 @@ services:
         value: "1"          # Render が TLS 終端
       - key: MAX_UPLOAD_MB
         value: "10"
+      - key: SEARCH_CACHE_MB
+        value: "64"          # 全文検索キャッシュのメモリ上限（保管量が多いなら増やす）
       - key: SESSION_SECRET
         generateValue: true  # Render が生成して固定保持（再起動でログアウトしない）
       - key: AUTH_PASSWORD
