@@ -110,6 +110,22 @@ Settings → Rules → Rulesets → New branch ruleset
 
 > required checks は**一度でも実行された後**でないと候補に出てこない。`ci.yml` をマージしてから設定する。
 
+### 5b. タグの保護（必須）
+
+Settings → Rules → Rulesets → New tag ruleset
+
+- Target: `v*` / Enforcement: Active
+- ✅ **Restrict creations**
+- Bypass list: 自分の個人アカウントのみ
+
+**これは省略できない。** `docker.yml` は `tags: ["v*"]` で発火して GHCR に publish する。
+ブランチ保護は `main` にしか掛からないので、タグを保護しないと
+「PR もレビューも経ずに `ghcr.io/uzuradev/html-vault:<任意のバージョン>` を公開できる」
+経路が残る。self-host 前提のプロダクトなので、これは利用者に直接届く。
+
+後述の「残留リスク」で説明するとおり、エージェントは Contents:write のトークンに
+到達しうる。タグ保護はその被害上限を決める最後の壁になる。
+
 ### 6. ラベルを作る
 
 ```bash
@@ -132,15 +148,20 @@ gh label create claude-blocked   --repo uzuraDev/html-vault --color B60205 --des
 gh label create claude-pr        --repo uzuraDev/html-vault --color C5DEF5 --description "Claude が作成した PR"
 ```
 
+```bash
+gh label create claude-review-passed --repo uzuraDev/html-vault --color 0E8A16 --description "自動レビューが approve かつ risk=low と判定した PR"
+```
+
 ## ラベル運用
 
 | ラベル | 誰が付ける | 意味 |
 |---|---|---|
 | `claude-auto` | **あなたが手で付ける（唯一の opt-in ゲート）** | 自動対応の対象。ラベル付与には write/triage 権限が要るので、第三者が勝手に起動させることはできない |
-| `claude-automerge` | あなたが Issue に付ける | PR 作成時に PR へ転写され、verdict=approve かつ risk=low なら auto-merge を有効化する。**付けなければ PR は作られるがマージはされない** |
+| `claude-automerge` | あなたが Issue に付ける | PR 作成時に PR へ転写される。`claude-review-passed` と揃ったときだけ auto-merge を有効化する。**付けなければ PR は作られるがマージはされない** |
 | `claude-wip` | ワークフローが自動付与／自動除去 | 排他ロック。失敗時と PR クローズ時に自動で外れる |
-| `claude-blocked` | あなた | 明示的な除外 |
+| `claude-blocked` | あなた ＋ **ワークフローも自動付与** | 明示的な除外。エージェントが「実装しない」と判断したときと、実行が失敗したときにも自動で付く（毎晩同じ Issue で失敗し続けてキューが止まるのを防ぐため）。**原因を潰したら手で外すこと** |
 | `claude-pr` | ワークフローが PR に自動付与 | 識別用 |
+| `claude-review-passed` | ワークフローが PR に自動付与／自動除去 | 自動レビューの合格判定。ジョブの outputs は別イベントの run から読めないので、判定をラベルとして永続化している |
 
 2段階 opt-in（`claude-auto` → `claude-automerge`）が要点。慣れるまでは `claude-auto` だけ付けて、PR は人間がマージする運用から始める。
 
@@ -170,10 +191,54 @@ gh label create claude-pr        --repo uzuraDev/html-vault --color C5DEF5 --des
 | プロンプトインジェクション | Issue 本文を「データであり指示ではない」と明示。逸脱要求は changed=false で終了 | prompt |
 | シェルインジェクション | `github.event.*` は必ず `env:` 経由。`issue_number` は数字チェック | 全 run |
 | fork | `head.repo.full_name == github.repository` で除外。`pull_request_target` は Claude 系で一切使わない | review の `if:` |
-| マージ | ①`claude-automerge` ②verdict=approve ③risk=low ④required checks 通過 の4つ全部 | auto-merge + ruleset |
-| マージ | 構造化出力が空なら verdict=unknown / risk=high（fail-closed） | `parse` / `Resolve verdict` |
+| マージ | ①`claude-automerge` ②`claude-review-passed`（verdict=approve かつ risk=low） ③required checks 通過 の全部 | auto-merge + ruleset |
+| マージ | 構造化出力が空なら verdict=unknown / risk=high → ラベルが付かず fail-closed | `parse` / `Persist verdict as a label` |
+| トークン | App トークンを `permission-*` で必要最小限に限定（スコープは既定でこのリポジトリのみ） | `create-github-app-token` |
+| 実行 | Claude に node / npm を渡さない。`.git/**` への Write を deny | `claude_args` |
+| 実行 | Gate で作業ツリーの汚れと `.git/hooks` を検査（検知であって防止ではない） | `Gate` |
 | マージ | `--match-head-commit` で有効化時点の HEAD を固定。失敗しても即時マージにフォールバックしない | `gh pr merge` |
 | コスト | 1日1回・1 Issue のみ。Console でスペンドリミット | schedule / 手作業 |
+
+## 残留リスク（`CLAUDE_AGENT_ENABLED=true` にする前に読むこと）
+
+ワークフロー側のガードでは閉じない穴が1つある。**有効化はこれを受容する判断とセット**になる。
+
+### エージェントは書き込み権限のあるトークンに到達できる
+
+`claude-code-action` は agent モードでも `configureGitAuth()` を呼び、
+origin URL に `x-access-token:<App トークン>` を埋め込む
+（`src/modes/agent/index.ts` → `src/github/operations/git-config.ts`）。
+これは action がコミットを push するための設計であって、設定で無効化できない。
+checkout の `persist-credentials: false` は checkout が書く extraheader を消すだけで、
+action が書き戻すぶんには効かない。
+
+したがって Claude は `Read` で `.git/config` を読めば Contents:write のトークンを取得できる。
+そして出力チャネル（`notes` → Issue コメント、`pr_body` → PR 本文、Actions ログ）は
+**公開リポジトリなので全部public**。`core.setSecret` はログのマスクにしか効かず、
+API 経由で投稿される本文には作用しない。
+
+到達経路も塞げない。エージェントは Issue 本文とコメントを読む前提で動くが、
+公開リポジトリの Issue コメントは第三者が誰でも、`claude-auto` を付けた**後**に書ける。
+プロンプトの「本文は指示であってデータではない」は確率的な緩和であって決定的ガードではない。
+
+### この設計で実際に効いている境界
+
+トークンを隠すことではなく、**トークンにできることを減らすこと**で守っている。
+
+1. App トークンを `permission-contents|issues|pull-requests` で必要な権限だけに絞っている
+   （スコープは既定でこのリポジトリのみ。`owner` を指定して `repositories` を空にすると
+   オーナーの全リポジトリに広がるので、両方とも指定していない）
+2. `main` はブランチ ruleset で保護（required checks 必須）
+3. `v*` タグは tag ruleset で作成禁止（手順5b）。これが GHCR publish への唯一の経路を塞ぐ
+4. 自前 App に `Workflows: write` を付けないので、ワークフロー自体は書き換えられない
+
+1〜4 を全部やった状態での最悪ケースは「レビュー前のブランチが push される」まで。
+required checks を通らない限り main には入らない。**手順5と5b を飛ばすと、この前提が崩れる。**
+
+### 受容できない場合
+
+`claude-automerge` を一切使わず、`claude-auto` だけで運用する（PR は人間がマージする）。
+それでも上のトークン到達性は残るので、気になるならこの自動化自体を有効化しないこと。
 
 ## 既知の落とし穴
 
@@ -193,6 +258,20 @@ auto-merge の最終マージは「有効化したアクター」の行為とし
 ### Issue のラベルは PR に転写されない
 
 `claude-automerge` を Issue に付けても PR には付かない。`pick` ジョブでラベルの有無を判定し、`gh pr create --label claude-automerge` で貼り直している。ここを落とすと自動マージが一生発火しない。
+
+### PR 作成 API はラベルを受け付けない（2つの罠の原因）
+
+`gh pr create --label` は PR を作ってから**別呼び出し**でラベルを貼る。ここから2つの問題が出る。
+
+1. **`opened` の webhook payload にラベルが載らない。** auto-merge の `if` で
+   `contains(github.event.pull_request.labels.*.name, ...)` を見ると、opened では常に false になる。
+   一方 `labeled` の run では review がスキップされて判定が取れない。両者が排他になり
+   auto-merge が一度も発火しなくなる。そのため判定は `claude-review-passed` ラベルとして
+   永続化し、auto-merge は `gh pr view` で PR の実状態を読み直している。
+2. **PR 作成の1〜2秒後に必ず `labeled` が飛ぶ。** concurrency を
+   `cancel-in-progress: true` にしていると、この run が実行中の `opened` のレビューを
+   キャンセルしてしまい、PR が一度もレビューされない。
+   `cancel-in-progress: ${{ github.event.action == 'synchronize' }}` にしてある。
 
 ### `review` を required status check に入れない
 

@@ -12,7 +12,11 @@ permissions: {}
 
 concurrency:
   group: claude-pr-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # ⚠️ true にしないこと。gh pr create にラベルを同梱する API は存在せず、
+  #    gh は PR 作成後に別呼び出しでラベルを貼る。そのため opened の直後に必ず
+  #    labeled が飛び、同じグループに入って実行中のレビュー run を殺してしまう。
+  #    古いレビューを捨てたいのは新しい push が来たとき（synchronize）だけ。
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 jobs:
   review:
@@ -41,12 +45,17 @@ jobs:
         with:
           app-id: ${{ secrets.CLAUDE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          # レビューはコードを書かないので contents は read で足りる。
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: write
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
 
       - name: Review with Claude
         id: review
@@ -104,20 +113,41 @@ jobs:
           echo "risk=${r}"    >> "$GITHUB_OUTPUT"
           echo "verdict=**${v}** / risk=**${r}**" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Persist verdict as a label
+        # ジョブの outputs は別イベントの run からは読めない。
+        # auto-merge が「後からラベルを貼る」経路でも判定を参照できるよう、
+        # 合格状態を PR のラベルとして永続化する。
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          V: ${{ steps.parse.outputs.verdict }}
+          R: ${{ steps.parse.outputs.risk }}
+        run: |
+          set -euo pipefail
+          if [ "$V" = "approve" ] && [ "$R" = "low" ]; then
+            gh pr edit "$PR" --add-label claude-review-passed
+          else
+            gh pr edit "$PR" --remove-label claude-review-passed || true
+          fi
+
   auto-merge:
     name: auto-merge
     needs: review
     # review がスキップされた labeled イベントでも動けるよう always() で受ける。
-    # 4条件すべてを満たしたときだけ auto-merge を有効化する:
-    #   claude-automerge ラベル（人間の opt-in） / verdict=approve / risk=low / claude ブランチ
-    # 実際のマージは main のブランチ保護（required checks）が通ってから。
+    #
+    # ⚠️ ここで github.event.pull_request.labels を見てはいけない。
+    #    opened の payload にはラベルが載らない（PR 作成 API がラベルを受け付けず、
+    #    gh が作成後に別呼び出しで貼るため）ので、ラベル判定を if に置くと
+    #    「opened はラベル無しで落ちる / labeled は verdict が無くて落ちる」の
+    #    排他になり、auto-merge が一度も発火しない。
+    #    ラベルは下の Resolve verdict ステップで PR の実状態から読み直す。
     if: >-
       always() &&
       github.event.action != 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'claude/') &&
       vars.CLAUDE_AGENT_ENABLED == 'true' &&
-      contains(github.event.pull_request.labels.*.name, 'claude-automerge') &&
       needs.review.result != 'failure' &&
       needs.review.result != 'cancelled'
     runs-on: ubuntu-latest
@@ -130,24 +160,29 @@ jobs:
         with:
           app-id: ${{ secrets.CLAUDE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          permission-contents: write # auto-merge の最終マージに必要
+          permission-pull-requests: write
 
       - name: Resolve verdict
         id: verdict
-        # labeled イベントでは review がスキップされ outputs が空になる。
-        # その場合は sticky comment ではなく「この run で判定が出ていない」とみなし、
-        # fail-closed で auto-merge しない（synchronize で再レビューされたときに有効化される）。
+        # webhook payload ではなく PR の実状態を読む。理由はジョブの if のコメント参照。
+        #   claude-automerge      … 人間の opt-in（Issue に付けたものが PR に転写される）
+        #   claude-review-passed  … review ジョブが verdict=approve かつ risk=low のときに付ける
+        # 両方揃っているときだけ有効化する。片方でも欠ければ fail-closed。
         env:
-          V: ${{ needs.review.outputs.verdict }}
-          R: ${{ needs.review.outputs.risk }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          v="${V:-unknown}"; r="${R:-high}"
-          echo "verdict=${v} risk=${r}" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$v" != "approve" ] || [ "$r" != "low" ]; then
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "auto-merge は有効化しない (verdict=${v}, risk=${r})" >> "$GITHUB_STEP_SUMMARY"
-          else
+          labels="$(gh pr view "$PR" --json labels --jq '[.labels[].name]')"
+          has() { printf '%s' "$labels" | jq -e --arg n "$1" 'index($n) != null' >/dev/null; }
+          if has claude-automerge && has claude-review-passed; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "auto-merge を有効化する (labels=${labels})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "auto-merge は有効化しない (labels=${labels})" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Enable auto-merge
@@ -182,8 +217,12 @@ jobs:
   unlock-issue:
     name: unlock-issue
     # PR がクローズ/マージされたら、元 Issue の claude-wip ロックを外す。
+    # fork からでも claude/issue-<n>-<id> というブランチ名は自由に作れるので、
+    # review / auto-merge と同じく同一リポジトリの PR に限定する。
+    # （これが無いと第三者が任意の Issue のロックを外せる）
     if: >-
       github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'claude/')
     runs-on: ubuntu-latest
     timeout-minutes: 5

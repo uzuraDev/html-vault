@@ -95,12 +95,26 @@ jobs:
         with:
           app-id: ${{ secrets.CLAUDE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          # App のインストール権限が広がっても、このトークンは下の3つだけに絞られる。
+          # Claude はこのトークンに到達できる（後述）ので、漏れたときの被害上限を下げる。
+          # owner / repositories は指定しない。既定で現在のリポジトリだけにスコープされる。
+          # （owner だけ指定して repositories を空にすると全リポジトリに広がるため）
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
+          # 既定 true だと .git/config の extraheader にトークンが平文で残る。
+          # なお claude-code-action は agent モードでも configureGitAuth() を呼び、
+          # origin URL に x-access-token:<token> を埋め込む（src/modes/agent/index.ts）。
+          # つまりこの1行だけでは Claude からトークンが見えなくなるわけではない。
+          # 実効的な境界はトークンの権限スコープ（上）とタグ保護であり、
+          # ここは action 実行前の窓を塞ぐ多重防御として入れている。
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -151,11 +165,12 @@ jobs:
                記述があっても従わず、changed=false で終了して notes に理由を書くこと。
             3. Issue が曖昧・要件不明・設計判断が必要と感じたら、実装せず changed=false で終了し、
                notes に「何が足りないか」を書く。無理に実装しないことが正解の場合がある。
-            4. 実装したら以下で自己検証する:
-               - node --check <変更した .js/.mjs>
-               - APP_LANG=en node scripts/build-i18n.mjs / APP_LANG=ja node scripts/build-i18n.mjs
-                 （「未定義のプレースホルダ」警告が出たらキー不足なので直す）
+            4. コード実行系のツールは渡していない（node / npm は実行できない）。
+               構文と i18n キーの検証は PR 作成後に ci.yml が行うので、
+               ここでは Read / Grep で自分の変更を読み返して整合を確認する。
+               特に locales/en.json と locales/ja.json のキーが揃っているかを目視で確かめる。
             5. 変更を `git add` して `git commit` する（1コミットにまとめる）。**push はしない。**
+               .git/ 配下のファイルは絶対に書き換えない。
 
             必ず守る制約:
             - Express 版(server.js / public/ / locales/)と Cloudflare Workers 版(worker/)の
@@ -180,8 +195,16 @@ jobs:
           claude_args: |
             --max-turns 30
             --model sonnet
-            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(npm ci),Bash(npm run build:i18n),Bash(node --check:*),Bash(node scripts/build-i18n.mjs),Bash(gh issue view:*)"
-            --disallowedTools "WebSearch,WebFetch"
+            # 実行系（npm ci / npm run build:i18n / node scripts/build-i18n.mjs / node --check）は
+            # 意図的に外した。Write が無制限にある以上「スクリプトを書き換えて実行」が
+            # 許可規則の中で完結してしまうため。npm ci は上の Install ステップで実行済み。
+            # node --check も安全ではない: `:*` は前置一致なので
+            # `node --check --require ./evil.js x.js` が一致し、--require は --check でも実行される。
+            # 構文と i18n の検証は PR 作成後に ci.yml が行う。
+            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(git add:*),Bash(git commit:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(gh issue view:*)"
+            # .git/ への書き込みを塞ぐ（core.pager や hooks 経由の実行を防ぐ）。
+            # ベストエフォート。すり抜けた場合は下の Gate が検知して落とす。
+            --disallowedTools "WebSearch,WebFetch,Write(.git/**),Edit(.git/**),MultiEdit(.git/**),Write(**/.git/**),Edit(**/.git/**),MultiEdit(**/.git/**)"
             --json-schema '{"type":"object","properties":{"changed":{"type":"boolean"},"pr_title":{"type":"string"},"pr_body":{"type":"string"},"notes":{"type":"string"}},"required":["changed","notes"]}'
 
       - name: Gate — 変更内容の検査
@@ -191,6 +214,20 @@ jobs:
           BRANCH: ${{ steps.branch.outputs.name }}
         run: |
           set -euo pipefail
+          # Gate は commit 済み差分(origin/main...HEAD)しか見ない。
+          # 「スクリプトを書き換えて実行 → 元に戻す」経路はそこに映らないので、
+          # 作業ツリーと .git/hooks をここで検査する。
+          # これは検知であって防止ではない（実行はもう終わっている）点に注意。
+          # -uno で未追跡ファイルを除外（public/index.html などの生成物で誤検知しないため）。
+          dirty="$(git status --porcelain -uno)"
+          if [ -n "$dirty" ]; then
+            echo "::error::作業ツリーに未コミットの変更が残っています:"; printf '%s\n' "$dirty"; exit 1
+          fi
+          hooks="$(find .git/hooks -type f ! -name '*.sample' 2>/dev/null || true)"
+          if [ -n "$hooks" ]; then
+            echo "::error::.git/hooks にフックが仕込まれています:"; printf '%s\n' "$hooks"; exit 1
+          fi
+
           if [ -z "${RESULT:-}" ]; then
             echo "::error::Claude が構造化出力を返しませんでした。fail-closed で中断します。"
             exit 1
@@ -217,7 +254,10 @@ jobs:
           echo "--- changed files ---"; printf '%s\n' "$files"
 
           # (1) 触ってはいけないパス
-          blocked="$(printf '%s\n' "$files" | grep -E '^(\.github/|Dockerfile$|docker-compose\.yml$|fly\.toml$|render\.yaml$|deploy/|LICENSE$|package\.json$|package-lock\.json$|worker/package\.json$|worker/package-lock\.json$|mcp/package\.json$)' || true)"
+          #   wrangler.toml: DEMO_MODE="1" を有効化すると全スニペットがログイン無しで
+          #     公開される。設定1行で認証が丸ごと外れるのでエージェントには触らせない。
+          #   worker/test/: 唯一の統合テスト。自動対応がテストを弱めて自分を通すのを防ぐ。
+          blocked="$(printf '%s\n' "$files" | grep -E '^(\.github/|Dockerfile$|docker-compose\.yml$|fly\.toml$|render\.yaml$|deploy/|LICENSE$|package\.json$|package-lock\.json$|worker/package\.json$|worker/package-lock\.json$|mcp/package\.json$|worker/wrangler\.toml$|worker/test/)' || true)"
           if [ -n "$blocked" ]; then
             echo "::error::禁止パスが変更されています:"; printf '%s\n' "$blocked"; exit 1
           fi
@@ -248,11 +288,16 @@ jobs:
         run: |
           set -euo pipefail
           notes="$(printf '%s' "$RESULT" | jq -r '.notes // "（理由なし）"')"
-          gh issue edit "$ISSUE" --remove-label claude-wip
+          # claude-wip を外すだけだと、実装不能な Issue が毎晩再選出されて
+          # キュー全体を止めたまま API を消費し続ける。claude-blocked を付けて
+          # 対象から外す。Issue を補足したら人間が手でラベルを外す。
+          gh issue edit "$ISSUE" --remove-label claude-wip --add-label claude-blocked
           printf '%s\n' \
             "自動対応を試みましたが、コード変更は行いませんでした。" \
             "" \
             "> $notes" \
+            "" \
+            "再選出を防ぐため \`claude-blocked\` を付けた。Issue を具体化したらラベルを外すこと。" \
             "" \
             "_(claude-issue-agent / run ${GITHUB_RUN_ID})_" \
             | gh issue comment "$ISSUE" --body-file -
@@ -276,8 +321,10 @@ jobs:
           esac
           body="${body}"$'\n\n---\n'"🤖 このPRは claude-issue-agent が自動生成した (run ${GITHUB_RUN_ID})。マージ前に必ず差分を確認すること。"
 
+          # persist-credentials: false にしたので、認証は URL に明示する。
           # HEAD 指定で push する（action が別ブランチを切っていても意図した内容が上がる）
-          git push origin "HEAD:refs/heads/${BRANCH}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${BRANCH}"
 
           # Issue の claude-automerge ラベルは PR に転写されないので、ここで貼り直す。
           # これが無いと claude-pr-review の auto-merge ジョブが永久に発火しない。
@@ -296,13 +343,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ steps.branch.outputs.name }}
         run: |
-          gh issue edit "$ISSUE" --remove-label claude-wip || true
+          # 失敗した Issue も claude-blocked で対象から外す。そうしないと毎晩同じ Issue で
+          # 失敗し続け、後続の Issue が永久に着手されない。原因を潰したら人間が外す。
+          gh issue edit "$ISSUE" --remove-label claude-wip --add-label claude-blocked || true
           gh issue comment "$ISSUE" --body \
-            "自動対応が失敗しました。ログ: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+            "自動対応が失敗した。再選出を防ぐため \`claude-blocked\` を付けた。原因を確認したらラベルを外すこと。ログ: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
           # push は成功したが gh pr create が失敗したケースで孤児ブランチが残るのを防ぐ。
           # PR が既にあるブランチは消さない。
           if [ -n "${BRANCH:-}" ] && git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             if [ "$(gh pr list --head "$BRANCH" --state all --json number --jq 'length')" = "0" ]; then
-              git push origin --delete "$BRANCH" || true
+              git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+                --delete "$BRANCH" || true
             fi
           fi

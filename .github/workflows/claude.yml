@@ -44,6 +44,9 @@ jobs:
           # issue_comment イベントの github.ref は既定ブランチなので、そのままだと
           # PR に @claude と書いても main のコードを読んでしまう。head を取れるよう全履歴を引く。
           fetch-depth: 0
+          # contents: write の GITHUB_TOKEN を .git/config に残さない。
+          # 下の PR head 取得は公開リポジトリなので匿名 fetch で通る。
+          persist-credentials: false
 
       - name: Checkout PR head (PR 上のコメントの場合)
         if: github.event.issue.pull_request != null || github.event_name == 'pull_request_review_comment' || github.event_name == 'pull_request_review'
