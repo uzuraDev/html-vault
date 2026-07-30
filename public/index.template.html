@@ -9,6 +9,9 @@
     --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --line:#2a2f3a;
     --txt:#e7ebf0; --muted:#9aa3b2; --accent:#5b9dff; --accent2:#3b7ddd;
     --danger:#ff6b6b; --ok:#43c59e; --radius:14px;
+    /* スクロールバー用。--line より一段明るくして、つまみが背景に沈まないようにする */
+    --scroll-thumb:#39404e; --scroll-thumb-hover:#4b5464;
+    color-scheme: dark;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -53,6 +56,27 @@
   .toolbar input{height:38px}
   #newBtn{flex:none;width:38px;height:38px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
   .list{overflow:auto;flex:1}
+  /* スクロールバー: UIのトーンに合わせる。トラックは透明にして
+     各要素の背景 (.list=--panel / pre.src=#0b0d11) をそのまま透かす */
+  .list,.modal-body,pre.src,textarea{
+    scrollbar-width:thin;
+    scrollbar-color:var(--scroll-thumb) transparent;
+  }
+  .list::-webkit-scrollbar,.modal-body::-webkit-scrollbar,
+  pre.src::-webkit-scrollbar,textarea::-webkit-scrollbar{width:10px;height:10px}
+  .list::-webkit-scrollbar-track,.modal-body::-webkit-scrollbar-track,
+  pre.src::-webkit-scrollbar-track,textarea::-webkit-scrollbar-track{background:transparent}
+  .list::-webkit-scrollbar-thumb,.modal-body::-webkit-scrollbar-thumb,
+  pre.src::-webkit-scrollbar-thumb,textarea::-webkit-scrollbar-thumb{
+    background:var(--scroll-thumb);border-radius:999px;
+    border:2px solid transparent;background-clip:padding-box;
+  }
+  .list::-webkit-scrollbar-thumb:hover,.modal-body::-webkit-scrollbar-thumb:hover,
+  pre.src::-webkit-scrollbar-thumb:hover,textarea::-webkit-scrollbar-thumb:hover{
+    background:var(--scroll-thumb-hover);background-clip:padding-box;
+  }
+  .list::-webkit-scrollbar-corner,.modal-body::-webkit-scrollbar-corner,
+  pre.src::-webkit-scrollbar-corner,textarea::-webkit-scrollbar-corner{background:transparent}
   .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
   .item:hover{background:var(--panel2)}
   .item.active{background:var(--panel2);border-left:3px solid var(--accent)}
@@ -84,7 +108,7 @@
   .tabs button{font-size:13px;padding:6px 12px}
   .tabs button.on{background:var(--accent2);border-color:var(--accent2)}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
-  iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0}
+  iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0;color-scheme:light}
   pre.src{flex:1;margin:0;overflow:auto;padding:14px;background:#0b0d11;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
   .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:24px}
 
