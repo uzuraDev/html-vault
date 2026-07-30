@@ -184,7 +184,9 @@ function htmlToText(html) {
 function makeExcerpt(text, idx, needleLen) {
   const start = Math.max(0, idx - SEARCH_EXCERPT_RADIUS);
   const end = Math.min(text.length, idx + needleLen + SEARCH_EXCERPT_RADIUS);
-  let ex = text.slice(start, end);
+  // slice は元の文字列を参照したまま (V8 の SlicedString) になり、120字程度の抜粋が
+  // 本文まるごとを生かし続けてしまう。短いので作り直して親を解放する。
+  let ex = text.slice(start, end).split('').join('');
   if (start > 0) ex = '…' + ex;
   if (end < text.length) ex = ex + '…';
   return ex;
@@ -196,12 +198,61 @@ function makeExcerpt(text, idx, needleLen) {
 // 2回目以降は KV 読み込みごと省く (Workers のアイソレートはリクエストを跨いで生きる)。
 // KV には mtime が無いので、index のメタ (updated/bytes) を版として使う。
 // PUT は必ず updated を進めるため、本文が変わったスニペットは自動で作り直される。
-// アイソレートのメモリ上限 (128MB) に対して十分小さい範囲でしか保持しない。
-const SEARCH_CACHE_MAX_CHARS = 4 * 1024 * 1024; // text+lower 合計。実メモリで約8MB
-const searchTextCache = new Map(); // id -> { ver, text, lower }
+//
+// ただし版キーだけに頼ると、KV の結果整合による窓 (最大60秒) で
+// 「index は新しいのに snip: の read は旧本文を返す」瞬間に当たったとき、
+// 旧本文が新しい版キーで焼き込まれて**永久に自己修復しない**。
+// (dropSearchText は書き込みを処理したアイソレートのメモリしか消せない)
+// そこで2つの歯止めを置く:
+//   1. 読んだ本文のバイト長が meta.bytes と食い違うなら、伝播途中とみなしてキャッシュしない
+//   2. エントリに読み取り時刻を持たせ、TTL を過ぎたら版キーが同じでも必ず読み直す
+// 「永久に直らない」状態は無くなるが、最悪の陳腐化は無くならない点に注意:
+//   - 歯止め1 は「バイト長まで同じ差し替え」(1文字の置換など) をすり抜ける
+//   - TTL の起点は読んだ時刻なので、伝播窓の終盤に旧本文を読むと収束後さらに TTL ぶん続く
+//     = 最悪で「伝播窓 + TTL」(およそ2分) になる。TTL 導入前は毎回読み直すので伝播窓だけだった
+//   - キャッシュヒット中は KV を読まないので、本文だけが先に消えた状態 (DELETE の伝播が
+//     index と分かれた場合など) にも TTL のあいだ気付けない
+// TTL を延ばすとこの窓がそのまま伸びる。速度と引き換えにする値なので安易に触らないこと。
+//
+// なお SEARCH_CACHE_MAX_CHARS が縛るのは**リクエストを跨いで保持する量**だけ。
+// 1リクエスト中に同時に生きる本文は、検索側でチャンクごとに使い捨てて有界にしている。
+// text+lower 合計。実メモリで約8MB を**アイソレートに常駐させ続ける**ので、
+// そのぶん全リクエストが使えるメモリ(128MB)が減る。速度と引き換えの値。
+const SEARCH_CACHE_MAX_CHARS = 4 * 1024 * 1024;
+const SEARCH_CACHE_TTL_MS = 60 * 1000; // 版キーが同じでもこの間隔で読み直す
+const searchTextCache = new Map(); // id -> { ver, at, text, lower }
 let searchCacheChars = 0;
-// KV の同時読み込み数。逐次 await だと「件数 × 1往復」を直列に待つことになる。
-const KV_READ_CONCURRENCY = 12;
+// 本文の並行読み込みは「件数」と「バイト数」の両方で抑える。
+// 逐次 await だと「件数 × 1往復」を直列に待つことになるが、件数だけで切ると
+// 10MB級 (MAX_BYTES) が並んだとき1チャンクで数十MBが同時に載り、
+// 1件ずつ処理していたときより悪くなる。
+// 件数の上限6は Workers の「応答ヘッダ待ちの同時接続」上限に合わせたもの (超える分はキューされる)。
+const KV_READ_CONCURRENCY = 6;
+const KV_READ_MAX_BYTES = 4 * 1024 * 1024;
+
+// list を上の2条件でチャンクに割る。1件だけで上限を超える場合はその1件でチャンクを作る
+// (「1件ずつ」に縮退するので、巨大スニペットでもメモリは悪化しない)。
+// bytesOf は要素からバイト数を取り出す関数 (呼び出し側が meta を包んでいることがある)。
+function chunkForRead(list, bytesOf = (m) => m.bytes) {
+  const out = [];
+  let cur = [];
+  let bytes = 0;
+  for (const item of list) {
+    // bytes が無い/0 の壊れたメタは最悪サイズとみなす。0 扱いにすると予算が効かなくなり、
+    // 件数上限だけで巨大な本文が並んでしまう (安全側に倒して1件ずつに縮退させる)。
+    const raw = Number(bytesOf(item));
+    const b = raw > 0 ? raw : MAX_BYTES;
+    if (cur.length && (cur.length >= KV_READ_CONCURRENCY || bytes + b > KV_READ_MAX_BYTES)) {
+      out.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(item);
+    bytes += b;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
 
 function dropSearchText(id) {
   const e = searchTextCache.get(id);
@@ -213,22 +264,25 @@ function dropSearchText(id) {
 // meta の本文を正規化済みで返す { text, lower }。KV に無ければ null。
 async function getSearchText(env, meta) {
   const ver = meta.updated + ':' + meta.bytes;
+  const now = Date.now();
   const hit = searchTextCache.get(meta.id);
-  if (hit && hit.ver === ver) return hit;
+  if (hit && hit.ver === ver && now - hit.at < SEARCH_CACHE_TTL_MS) return hit;
   const raw = await env.VAULT.get('snip:' + meta.id);
   if (raw == null) {
     dropSearchText(meta.id);
     return null;
   }
   const text = htmlToText(raw);
-  const entry = { ver, text, lower: text.toLowerCase() };
+  const entry = { ver, at: now, text, lower: text.toLowerCase() };
   dropSearchText(meta.id); // 古い版が居たら先に外して枠を空ける
+  // 読んだ本文と index が食い違う = KV がまだ収束していない。今回の結果には使うが残さない。
+  const consistent = byteLen(raw) === meta.bytes;
   const cost = entry.text.length + entry.lower.length;
-  if (searchCacheChars + cost <= SEARCH_CACHE_MAX_CHARS) {
+  if (consistent && searchCacheChars + cost <= SEARCH_CACHE_MAX_CHARS) {
     searchTextCache.set(meta.id, entry);
     searchCacheChars += cost;
   }
-  return entry; // 入らなくても今回の検索には使う
+  return entry; // 上限で入らなくても今回の検索には使う
 }
 
 // プレビューに注入するスクロール位置の記憶/復元スクリプト。
@@ -600,30 +654,41 @@ export default {
         }
         const needle = q.toLowerCase();
         const list = (await loadIndex(env)).sort((a, b) => b.updated - a.updated);
+        // index から消えた id のキャッシュを**読み込みより先に**解放する。
+        // (削除・再インポート等で残り続けると上限を占めて、以後どれもキャッシュに入らなくなる。
+        //  後回しにすると、差し替え直後の検索だけ枠が空かず余分にコールドになる)
+        const seen = new Set(list.map((m) => m.id));
+        for (const id of searchTextCache.keys()) {
+          if (!seen.has(id)) dropSearchText(id);
+        }
         // まずメタだけで判定し、本文の取得(KV読み + HTML→テキスト変換)が要るものを集める。
         const rows = list.map((meta) => ({
           meta,
           inTitle: (meta.title || '').toLowerCase().includes(needle),
           inTags: (meta.tags || '').toLowerCase().includes(needle),
-          body: null,
+          inBody: false,
+          excerpt: '',
         }));
         const needBody = rows.filter((r) => !r.inTitle && !r.inTags && validId(r.meta.id));
         // 本文はまとめて並行取得する。1件ずつ await すると件数分の往復を直列に待つことになる。
         // (KV への read 回数は従来と同じ = サブリクエスト上限への影響は変わらない)
-        for (let i = 0; i < needBody.length; i += KV_READ_CONCURRENCY) {
+        // 判定と抜粋の生成はチャンクの中で終わらせ、本文への参照はチャンクを抜ける前に捨てる。
+        // 対象ぶんを同時に生かすと、件数に比例してアイソレートのメモリ(128MB)を食い潰す。
+        for (const chunk of chunkForRead(needBody, (r) => r.meta.bytes)) {
           await Promise.all(
-            needBody.slice(i, i + KV_READ_CONCURRENCY).map(async (r) => {
-              r.body = await getSearchText(env, r.meta);
+            chunk.map(async (r) => {
+              const body = await getSearchText(env, r.meta);
+              if (!body) return;
+              const idx = body.lower.indexOf(needle);
+              if (idx === -1) return;
+              r.inBody = true;
+              r.excerpt = makeExcerpt(body.text, idx, needle.length);
             })
           );
         }
         const results = [];
-        const seen = new Set();
         for (const r of rows) {
-          seen.add(r.meta.id);
-          const idx = r.body ? r.body.lower.indexOf(needle) : -1;
-          const inBody = idx !== -1;
-          if (!r.inTitle && !r.inTags && !inBody) continue;
+          if (!r.inTitle && !r.inTags && !r.inBody) continue;
           results.push({
             id: r.meta.id,
             title: r.meta.title,
@@ -632,13 +697,8 @@ export default {
             updated: r.meta.updated,
             bytes: r.meta.bytes,
             field: r.inTitle ? 'title' : r.inTags ? 'tags' : 'body',
-            excerpt: inBody ? makeExcerpt(r.body.text, idx, needle.length) : '',
+            excerpt: r.excerpt,
           });
-        }
-        // index から消えた id のキャッシュを解放する (削除・再インポート等で
-        // 掃除されないまま残ると、上限を占めて以後どれもキャッシュに入らなくなる)。
-        for (const id of searchTextCache.keys()) {
-          if (!seen.has(id)) dropSearchText(id);
         }
         return json({ results, q, csrf });
       }
