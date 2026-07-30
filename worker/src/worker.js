@@ -323,6 +323,16 @@ function injectScrollScript(html) {
   if (i >= 0) return html.slice(0, i) + SCROLL_SCRIPT + html.slice(i);
   return html + SCROLL_SCRIPT;
 }
+// 一覧の共通ソート: ピン留めを先頭に、各グループ内は表示順キーの昇順。
+// 表示順キーは手動並べ替え済みなら order (0,1,2,...)、未設定なら -updated。
+// -updated は大きな負値になるため、並べ替え後に作られた新規スニペットは
+// 自動的にグループ先頭 (新しい順) に浮き、ドラッグされた時点で order が確定する。
+function displayKey(m) {
+  return m.order != null ? m.order : -(m.updated || 0);
+}
+function byDisplayOrder(a, b) {
+  return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || displayKey(a) - displayKey(b);
+}
 // index は「読んで・直して・全体を書き戻す」方式。Workers KV にトランザクションは
 // ないため、同時書き込みが重なると後勝ちでメタデータが失われ得る。本アプリは
 // 単一ユーザーのパーソナルツールという前提でこの割り切りを採る (厳密な整合性が
@@ -362,6 +372,7 @@ async function createSnippet(env, { html, title, tags }) {
     created: now,
     updated: now,
     bytes: byteLen(body),
+    pinned: false,
   };
   const list = await loadIndex(env);
   list.push(meta);
@@ -445,9 +456,10 @@ async function mcpUploadHtml(env, args, origin) {
 async function mcpListSnippets(env, args) {
   const n = parseInt((args && args.limit) || 20, 10);
   const limit = Math.min(Math.max(Number.isFinite(n) ? n : 20, 1), 100);
-  const list = (await loadIndex(env)).sort((a, b) => b.updated - a.updated).slice(0, limit);
+  const list = (await loadIndex(env)).sort(byDisplayOrder).slice(0, limit);
   const out = list.map((s) => ({
     id: s.id, title: s.title, tags: s.tags, bytes: s.bytes,
+    pinned: !!s.pinned,
     updated: new Date(s.updated).toISOString(),
   }));
   return JSON.stringify(out, null, 2);
@@ -634,7 +646,7 @@ export default {
           if (!tokenOk && !sess) return json({ error: 'Unauthorized.' }, 401);
           if (sess) csrf = await csrfFor(env.SESSION_SECRET, sess.n);
         }
-        const list = (await loadIndex(env)).sort((a, b) => b.updated - a.updated);
+        const list = (await loadIndex(env)).sort(byDisplayOrder);
         return json({ snippets: list, csrf });
       }
 
@@ -653,7 +665,7 @@ export default {
           return json({ results: [], q, csrf });
         }
         const needle = q.toLowerCase();
-        const list = (await loadIndex(env)).sort((a, b) => b.updated - a.updated);
+        const list = (await loadIndex(env)).sort(byDisplayOrder);
         // index から消えた id のキャッシュを**読み込みより先に**解放する。
         // (削除・再インポート等で残り続けると上限を占めて、以後どれもキャッシュに入らなくなる。
         //  後回しにすると、差し替え直後の検索だけ枠が空かず余分にコールドになる)
@@ -696,6 +708,7 @@ export default {
             created: r.meta.created,
             updated: r.meta.updated,
             bytes: r.meta.bytes,
+            pinned: !!r.meta.pinned,
             field: r.inTitle ? 'title' : r.inTags ? 'tags' : 'body',
             excerpt: r.excerpt,
           });
@@ -846,6 +859,30 @@ export default {
         });
       }
 
+      // ---- 並べ替え (ドラッグ&ドロップの表示順を保存) ----
+      // ※ 下の /api/snippets/:id (PUT) の正規表現にもマッチするパスなので、必ず先に処理する。
+      // body.ids は「現在の表示順そのままの完全なID列」。各スニペットの order に列内の位置を保存する。
+      // ピン留め/非ピンのグループ分けはソート側 (byDisplayOrder) が pinned を優先するため、
+      // order はグループを跨いだ通し番号で問題ない (グループ内の相対順だけが効く)。
+      if (path === '/api/snippets/order' && method === 'PUT') {
+        const sess = await requireAuth(req, env);
+        if (!sess) return json({ error: 'Unauthorized.' }, 401);
+        if (!(await csrfOk(req, sess, env))) return json({ error: 'Invalid CSRF token.' }, 403);
+        const b = await req.json().catch(() => ({}));
+        if (!Array.isArray(b.ids) || !b.ids.every((v) => typeof v === 'string' && validId(v))) {
+          return json({ error: 'Invalid request.' }, 400);
+        }
+        const pos = new Map(b.ids.map((id, i) => [id, i]));
+        const list = await loadIndex(env);
+        // ids に無いスニペット (並べ替え操作の後に別端末で作られた等) は order を付けず、
+        // 未設定フォールバック (-updated) でグループ先頭に浮かせる。
+        for (const meta of list) {
+          if (pos.has(meta.id)) meta.order = pos.get(meta.id);
+        }
+        await saveIndex(env, list);
+        return json({ ok: true });
+      }
+
       // ---- 更新 / 削除 ----
       const mId = path.match(/^\/api\/snippets\/([^/]+)$/);
       if (mId && method === 'PUT') {
@@ -858,14 +895,22 @@ export default {
         const meta = list.find((s) => s.id === id);
         if (!meta) return json({ error: 'Not found.' }, 404);
         const b = await req.json().catch(() => ({}));
+        let contentChanged = false;
         if (typeof b.html === 'string') {
           if (byteLen(b.html) > MAX_BYTES) return json({ error: 'Exceeds the 10MB size limit.' }, 413);
           await env.VAULT.put('snip:' + id, b.html);
+          // 本文が変わったので検索用テキストのキャッシュを捨てる。
+          // (版キーの updated/bytes でも大抵は検知できるが、同一ミリ秒・同一バイト長の
+          //  上書きをすり抜けるため、書き込み側でも必ず落とす)
+          dropSearchText(id);
           meta.bytes = byteLen(b.html);
+          contentChanged = true;
         }
-        if (typeof b.title === 'string') meta.title = sanitizeText(b.title) || 'Untitled';
-        if (typeof b.tags === 'string') meta.tags = sanitizeText(b.tags, 120);
-        meta.updated = Date.now();
+        if (typeof b.title === 'string') { meta.title = sanitizeText(b.title) || 'Untitled'; contentChanged = true; }
+        if (typeof b.tags === 'string') { meta.tags = sanitizeText(b.tags, 120); contentChanged = true; }
+        // ピン留めの付け外し (幾つでも可)。並び順だけの変更なので updated は動かさない。
+        if (typeof b.pinned === 'boolean') meta.pinned = b.pinned;
+        if (contentChanged) meta.updated = Date.now();
         await saveIndex(env, list);
         return json({ ok: true, snippet: meta });
       }
@@ -880,6 +925,7 @@ export default {
         const idx = list.findIndex((s) => s.id === id);
         if (idx === -1) return json({ error: 'Not found.' }, 404);
         await env.VAULT.delete('snip:' + id);
+        dropSearchText(id); // 削除済みが検索にヒットし続けないように
         list.splice(idx, 1);
         await saveIndex(env, list);
         return json({ ok: true });
