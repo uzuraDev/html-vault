@@ -25,12 +25,20 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, '..');
+
+// `--root <dir>` は test/check-inline-js.test.mjs が用意した HTML を検査するためのもの。
+// 引数なしで実行したときだけリポジトリ全体を見て REQUIRED_FILES も要求する（= CI の挙動）。
+// 別のルートを渡したときに REQUIRED_FILES を要求しても、そのファイルは存在しないので
+// 常に失敗するだけで意味がない。抜け道に見えるが、CI が叩くコマンドは
+// .github/ 配下（Gate の禁止パス）に固定されているので、ここを迂回する経路にはならない。
+const rootArgIdx = process.argv.indexOf('--root');
+const IS_DEFAULT_ROOT = rootArgIdx === -1;
+const ROOT = IS_DEFAULT_ROOT ? join(__dirname, '..') : resolve(process.argv[rootArgIdx + 1] ?? '.');
 
 // 走査から外すディレクトリ。node_modules は論外として、.wrangler は wrangler の生成物、
 // data は実行時のスニペット保存先（＝利用者がアップロードした他人の HTML）で、
@@ -59,14 +67,28 @@ const REQUIRED_FILES = ['public/index.template.html', 'worker/public/index.html'
 
 // HTML 仕様の「JavaScript MIME type」相当。type 省略もクラシックスクリプト扱い。
 // ここに無い type（application/json, text/template など）はそもそも実行されないので検査しない。
-const CLASSIC_TYPES = new Set([
-  '',
-  'text/javascript',
-  'application/javascript',
+// mimesniff の "JavaScript MIME type essence" の完全な一覧。
+// https://mimesniff.spec.whatwg.org/#javascript-mime-type
+//
+// 部分的な一覧を自前で持つと、漏れた値（text/jscript など）が「JS ではない」と判定され、
+// 構文エラーを含むブロックが静かに検査対象から外れる。仕様の一覧をそのまま持つ。
+const JAVASCRIPT_MIME_ESSENCES = new Set([
   'application/ecmascript',
+  'application/javascript',
   'application/x-ecmascript',
   'application/x-javascript',
   'text/ecmascript',
+  'text/javascript',
+  'text/javascript1.0',
+  'text/javascript1.1',
+  'text/javascript1.2',
+  'text/javascript1.3',
+  'text/javascript1.4',
+  'text/javascript1.5',
+  'text/jscript',
+  'text/livescript',
+  'text/x-ecmascript',
+  'text/x-javascript',
 ]);
 
 // index.template.html の <script> には build-i18n.mjs が置換する前の {{key}} が生で残っている
@@ -89,11 +111,62 @@ function collectHtmlFiles(dir, out = []) {
   return out;
 }
 
-/** 開始タグの属性文字列から属性値を取り出す。値なし属性は空文字を返す。 */
-function readAttr(attrs, name) {
-  const m = new RegExp(`(?:^|\\s)${name}\\s*(?:=\\s*("([^"]*)"|'([^']*)'|([^\\s"'>]+)))?`, 'i').exec(attrs);
-  if (!m) return null;
-  return m[2] ?? m[3] ?? m[4] ?? '';
+/**
+ * 開始タグの属性を HTML のトークナイザ規則で読む。
+ * 戻り値は Map（小文字の属性名 -> 値。値なし属性は空文字）と、`>` の直後の位置。
+ *
+ * なぜ正規表現をやめたか:
+ *   属性文字列全体に `/\bsrc\s*=/` のような正規表現を当てると、別属性の値の中に
+ *   現れた文字列を属性名として拾ってしまう。たとえば
+ *     <script data-note=" src='x.js' ">壊れたコード</script>
+ *   は、ブラウザではインラインスクリプトとして実行されるのに「src 属性つき」と
+ *   誤判定して skip し、構文エラーを静かに見逃していた。
+ *   引用符の内側と外側を区別できない以上、正規表現ではこの誤検出を塞げない。
+ *
+ *   同じ理由で開始タグの終わりも `[^>]*` では求められない。属性値の中の `>` で
+ *   タグが切れたことにされ、抽出範囲がずれる。ここで一緒に位置を返す。
+ *
+ * @param {string} html
+ * @param {number} from `<script` の直後の位置
+ */
+function parseOpenTag(html, from) {
+  const attrs = new Map();
+  let i = from;
+  const isSpace = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\f' || c === '\r';
+
+  while (i < html.length) {
+    while (i < html.length && (isSpace(html[i]) || html[i] === '/')) i++;
+    if (i >= html.length) break;
+    if (html[i] === '>') return { attrs, tagEnd: i + 1 };
+
+    // 属性名
+    const nameStart = i;
+    while (i < html.length && !isSpace(html[i]) && html[i] !== '=' && html[i] !== '>' && html[i] !== '/') i++;
+    const name = html.slice(nameStart, i).toLowerCase();
+    if (name === '') { i++; continue; } // 想定外の文字は読み飛ばす（無限ループ防止）
+
+    while (i < html.length && isSpace(html[i])) i++;
+    let value = '';
+    if (html[i] === '=') {
+      i++;
+      while (i < html.length && isSpace(html[i])) i++;
+      const q = html[i];
+      if (q === '"' || q === "'") {
+        const end = html.indexOf(q, i + 1);
+        // 閉じ引用符が無ければタグが壊れている。残り全部を値とみなして打ち切る。
+        if (end === -1) { attrs.set(name, html.slice(i + 1)); return { attrs, tagEnd: html.length }; }
+        value = html.slice(i + 1, end);
+        i = end + 1;
+      } else {
+        const vStart = i;
+        while (i < html.length && !isSpace(html[i]) && html[i] !== '>') i++;
+        value = html.slice(vStart, i);
+      }
+    }
+    // 重複属性は最初のものが勝つ（HTML 仕様）。
+    if (!attrs.has(name)) attrs.set(name, value);
+  }
+  return { attrs, tagEnd: html.length };
 }
 
 /**
@@ -142,32 +215,43 @@ function maskHtmlComments(html) {
 
 /**
  * <script> ブロックを抽出する。
- * 属性部を [^>]* にしているので属性値に `>` が入ると崩れるが、それはブラウザのタグ解釈と
- * ほぼ同じ挙動で、文字列中の `</script>` でブロックが切れるのも同様にブラウザ準拠。
+ *
+ * 開始タグは parseOpenTag で引用符を理解しながら読むので、属性値に `>` が入っても崩れない。
+ * 一方、文字列リテラル中の `</script>` でブロックが切れるのはブラウザと同じ挙動なので直さない
+ * （HTML のパーサ自体がそこでスクリプトを終了する）。
  */
 function extractScripts(html) {
-  const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+  const OPEN_RE = /<script(?=[\s/>])/gi;
   const blocks = [];
   let m;
-  while ((m = SCRIPT_RE.exec(html)) !== null) {
-    const attrs = m[1];
-    const code = m[2];
-    const openTagEnd = m.index + m[0].indexOf('>') + 1;
+  while ((m = OPEN_RE.exec(html)) !== null) {
+    const { attrs, tagEnd } = parseOpenTag(html, m.index + '<script'.length);
+    const closeRe = /<\/script\s*>/gi;
+    closeRe.lastIndex = tagEnd;
+    const close = closeRe.exec(html);
+    if (!close) break; // 閉じタグが無い = 以降は解釈できない
+    const code = html.slice(tagEnd, close.index);
+
     // 開始タグ直後の位置が何行目か（1 始まり）。この行が抽出コードの 1 行目になる。
-    const startLine = countNewlines(html, 0, openTagEnd) + 1;
-    // 大文字小文字は無視（HTML 仕様も type の照合は ASCII 大小無視）。
-    const rawType = (readAttr(attrs, 'type') ?? '').trim().toLowerCase();
-    // MIME のパラメータ部を落とした本体（essence）で照合する。
-    // `type="text/javascript;charset=utf-8"` はブラウザが JS と判定して実行するので、
-    // 完全一致で比較していると「ブラウザは実行するがチェッカーは見ない」ブロックができる。
-    // これは唯一の静かな取りこぼし経路なので、パラメータは必ず切り落とす。
-    // module はパラメータを許さない（`module;x` はどちらでもない）ので rawType で見る。
-    const essence = rawType.includes(';') ? rawType.slice(0, rawType.indexOf(';')).trim() : rawType;
-    const isModule = rawType === 'module';
+    const startLine = countNewlines(html, 0, tagEnd) + 1;
+
+    // HTML 仕様の判定に合わせる。
+    // https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element
+    //
+    // 仕様は type 属性の値から前後の空白を落とした「文字列そのもの」を
+    // JavaScript MIME type essence と照合する（essence match）。MIME として解析して
+    // パラメータを捨てるのではない。したがって
+    //   type="text/javascript;charset=utf-8"
+    // はブラウザでは **実行されない**（データブロック扱い）。ここを essence だけ見て
+    // JS と判定していたため、実行されないブロックを構文エラーで落としていた。
+    const rawTypeAttr = attrs.get('type');
+    const ttype = (rawTypeAttr ?? '').trim().toLowerCase();
+    const isModule = ttype === 'module';
+    const isClassic = ttype === '' || JAVASCRIPT_MIME_ESSENCES.has(ttype);
 
     let skipReason = null;
-    if (readAttr(attrs, 'src') !== null) skipReason = 'src 属性つき（中身は外部ファイル）';
-    else if (!isModule && !CLASSIC_TYPES.has(essence)) skipReason = `type="${rawType}"（JS ではない）`;
+    if (attrs.has('src')) skipReason = 'src 属性つき（中身は外部ファイル）';
+    else if (!isModule && !isClassic) skipReason = `type="${ttype}"（ブラウザが JS として実行しない）`;
     else if (code.trim() === '') skipReason = '空ブロック';
 
     blocks.push({
@@ -177,6 +261,7 @@ function extractScripts(html) {
       isModule,
       skipReason,
     });
+    OPEN_RE.lastIndex = close.index + close[0].length;
   }
   return blocks;
 }
@@ -292,7 +377,9 @@ for (const { abs, rel } of htmlFiles) {
 
 // 全体集計はファイル単位の取りこぼしを隠す（他ファイルに 1 ブロックあれば 0 にならない）ので、
 // 「必ず検査されるべきファイル」は個別に確認する。
-const missingRequired = REQUIRED_FILES.filter((rel) => (checkedBlocksByFile.get(rel) ?? 0) === 0);
+const missingRequired = IS_DEFAULT_ROOT
+  ? REQUIRED_FILES.filter((rel) => (checkedBlocksByFile.get(rel) ?? 0) === 0)
+  : [];
 
 // 構文エラーと検査漏れは原因が別なので、片方で打ち切らず両方出してから落とす。
 // 打ち切ると「直して再実行したらもう片方が出る」を繰り返すことになるため。

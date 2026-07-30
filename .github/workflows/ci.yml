@@ -5,8 +5,16 @@ name: ci
 # 検証ジョブ(check)と Workers 版の統合テスト(worker-smoke)を必須チェックとして分離する。
 # Dependabot PR は人間の目を通さず自動マージされるので、ここの質がそのまま main の質になる。
 #
-# ジョブ名 check / worker-smoke はブランチ保護の required status checks に登録済み。
-# 名前を変えると保護が空振りするので変更しない。
+# ⚠️ このワークフローが存在するだけでは何も守れない。
+#    ジョブが緑かどうかとマージできるかどうかは別で、後者はブランチ保護の
+#    required status checks に登録されているものだけで決まる。
+#    2026-07-31 時点の main は `build`(docker.yml) しか必須にしておらず、
+#    check / worker-smoke は登録されていない。この状態では Dependabot PR が
+#    check を落としたまま `build` の成功だけで自動マージされうる。
+#    Settings > Branches で `check` と `worker-smoke` を必須に追加すること。
+#    https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request
+#
+# 登録したあとはジョブ名を変えないこと（名前で照合するので、変えると保護が空振りする）。
 # audit は意図的に必須チェックに入れていない（理由は audit ジョブの直上に書いた）。
 
 on:
