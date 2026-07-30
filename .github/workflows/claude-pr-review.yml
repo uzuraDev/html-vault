@@ -1,0 +1,247 @@
+name: claude-pr-review
+
+# claude/** ブランチの PR をレビューし、合格かつ claude-automerge ラベルがあれば
+# auto-merge を有効化する。PR が閉じたら Issue の claude-wip ロックを外す。
+
+on:
+  pull_request:
+    # labeled を入れているのは、後からラベルを貼って auto-merge を有効化できるようにするため。
+    types: [opened, synchronize, reopened, labeled, closed]
+
+permissions: {}
+
+concurrency:
+  group: claude-pr-review-${{ github.event.pull_request.number }}
+  # ⚠️ true にしないこと。gh pr create にラベルを同梱する API は存在せず、
+  #    gh は PR 作成後に別呼び出しでラベルを貼る。そのため opened の直後に必ず
+  #    labeled が飛び、同じグループに入って実行中のレビュー run を殺してしまう。
+  #    古いレビューを捨てたいのは新しい push が来たとき（synchronize）だけ。
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+jobs:
+  review:
+    name: review
+    # ⚠️ このジョブを required status check にしないこと。
+    #    人間の PR ではスキップされ、スキップされた required check は永久に pending 扱いになる。
+    #
+    # labeled ではレビューをやり直さない（ラベル付与だけで API を消費しないため）。
+    # 直前の run のレビュー結果は auto-merge ジョブが自分で読み直す。
+    if: >-
+      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      vars.CLAUDE_AGENT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.parse.outputs.verdict }}
+      risk: ${{ steps.parse.outputs.risk }}
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          # レビューはコードを書かないので contents は read で足りる。
+          permission-contents: read
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Review with Claude
+        id: review
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          use_sticky_comment: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            この PR は claude-issue-agent が自動生成したものです。
+            「自分が書いたから通す」ではなく、**別人が書いたコードとして懐疑的に**レビューしてください。
+            PR ブランチは既にチェックアウト済みです。
+
+            重点:
+            1. セキュリティ回帰 — CONTRIBUTING.md の "Keep intact" が守られているか。
+               CSRF トークン、プレビュー iframe の sandbox（allow-same-origin が付いていないか）、
+               ログインのレート制限、helmet / CSP ヘッダ、サーバー生成のファイル ID。
+               HTML 保管庫という性質上、XSS / パストラバーサル / SSRF は致命的。
+            2. 2エディションの整合 — server.js 側と worker/src/worker.js 側で挙動が食い違っていないか。
+            3. i18n — locales/en.json と locales/ja.json の両方にキーがあるか。
+            4. 依存追加や package.json 変更がないか。
+            5. Issue の要求を実際に満たしているか（やりすぎ・やらなすぎ）。
+
+            指摘は inline comment で、総評は1つのコメントにまとめてください。
+            総評の本文に "@claude" という文字列を書かないこと（別ワークフローが誤って起動する）。
+
+            最後に判定を返してください:
+            - verdict: 問題なし → "approve" / 修正が必要 → "request_changes"
+            - risk: この変更をレビューなしで main に入れたときのリスク "low" / "medium" / "high"
+              セキュリティ・認証・ファイル保存・CSP に触れる変更は最低でも "medium"。
+              迷ったら高い方を選ぶこと。
+          claude_args: |
+            --max-turns 20
+            --model sonnet
+            --allowedTools "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(git diff:*),Bash(git log:*)"
+            --disallowedTools "Edit,MultiEdit,Write,WebSearch,WebFetch"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","request_changes"]},"risk":{"type":"string","enum":["low","medium","high"]},"summary":{"type":"string"}},"required":["verdict","risk","summary"]}'
+
+      - name: Parse verdict (fail-closed)
+        id: parse
+        env:
+          RESULT: ${{ steps.review.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+          # 構造化出力が取れなければ unknown。自動マージは発火しない（fail-closed）。
+          v="unknown"; r="high"
+          if [ -n "${RESULT:-}" ]; then
+            v="$(printf '%s' "$RESULT" | jq -r '.verdict // "unknown"')"
+            r="$(printf '%s' "$RESULT" | jq -r '.risk    // "high"')"
+          fi
+          echo "verdict=${v}" >> "$GITHUB_OUTPUT"
+          echo "risk=${r}"    >> "$GITHUB_OUTPUT"
+          echo "verdict=**${v}** / risk=**${r}**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Persist verdict as a label
+        # ジョブの outputs は別イベントの run からは読めない。
+        # auto-merge が「後からラベルを貼る」経路でも判定を参照できるよう、
+        # 合格状態を PR のラベルとして永続化する。
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          V: ${{ steps.parse.outputs.verdict }}
+          R: ${{ steps.parse.outputs.risk }}
+        run: |
+          set -euo pipefail
+          if [ "$V" = "approve" ] && [ "$R" = "low" ]; then
+            gh pr edit "$PR" --add-label claude-review-passed
+          else
+            gh pr edit "$PR" --remove-label claude-review-passed || true
+          fi
+
+  auto-merge:
+    name: auto-merge
+    needs: review
+    # review がスキップされた labeled イベントでも動けるよう always() で受ける。
+    #
+    # ⚠️ ここで github.event.pull_request.labels を見てはいけない。
+    #    opened の payload にはラベルが載らない（PR 作成 API がラベルを受け付けず、
+    #    gh が作成後に別呼び出しで貼るため）ので、ラベル判定を if に置くと
+    #    「opened はラベル無しで落ちる / labeled は verdict が無くて落ちる」の
+    #    排他になり、auto-merge が一度も発火しない。
+    #    ラベルは下の Resolve verdict ステップで PR の実状態から読み直す。
+    if: >-
+      always() &&
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      vars.CLAUDE_AGENT_ENABLED == 'true' &&
+      needs.review.result != 'failure' &&
+      needs.review.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          permission-contents: write # auto-merge の最終マージに必要
+          permission-pull-requests: write
+
+      - name: Resolve verdict
+        id: verdict
+        # webhook payload ではなく PR の実状態を読む。理由はジョブの if のコメント参照。
+        #   claude-automerge      … 人間の opt-in（Issue に付けたものが PR に転写される）
+        #   claude-review-passed  … review ジョブが verdict=approve かつ risk=low のときに付ける
+        # 両方揃っているときだけ有効化する。片方でも欠ければ fail-closed。
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels="$(gh pr view "$PR" --json labels --jq '[.labels[].name]')"
+          has() { printf '%s' "$labels" | jq -e --arg n "$1" 'index($n) != null' >/dev/null; }
+          if has claude-automerge && has claude-review-passed; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "auto-merge を有効化する (labels=${labels})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "auto-merge は有効化しない (labels=${labels})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enable auto-merge
+        if: steps.verdict.outputs.ok == 'true'
+        # ⚠️ ここで GITHUB_TOKEN を使わないこと。auto-merge を有効化したアクターが
+        #    最終的な main への push の主体になる。GITHUB_TOKEN だとその push が
+        #    docker.yml (on: push branches:[main]) を起動せず、GHCR への publish が
+        #    静かにスキップされる。App トークンなら起動する。
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            echo "auto-merge は既に有効です。"; exit 0
+          fi
+          set +e
+          out="$(gh pr merge "$PR" --auto --squash --delete-branch --match-head-commit "$HEAD_SHA" 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            # dependabot-auto-merge.yml と違い、ここでは即時マージにフォールバックしない。
+            # "clean status" = 必須チェックが1つも無い状態であり、
+            # ブランチ保護が正しく設定されていないサイン。無検証マージは絶対にしない。
+            echo "::error::auto-merge を有効化できませんでした。main のブランチ保護（required status checks: check, worker-smoke, build）と Settings > General > Allow auto-merge を確認してください。"
+            exit "$status"
+          fi
+
+  unlock-issue:
+    name: unlock-issue
+    # PR がクローズ/マージされたら、元 Issue の claude-wip ロックを外す。
+    # fork からでも claude/issue-<n>-<id> というブランチ名は自由に作れるので、
+    # review / auto-merge と同じく同一リポジトリの PR に限定する。
+    # （これが無いと第三者が任意の Issue のロックを外せる）
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'claude/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Remove claude-wip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # PR 本文は信頼できない文字列。必ず env 経由で渡す（スクリプトインジェクション対策）
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          # ブランチ名 claude/issue-<n>-<runid> から番号を取る（本文より信頼できる）
+          n="$(printf '%s' "$HEAD_REF" | sed -n 's|^claude/issue-\([0-9]\{1,\}\)-.*$|\1|p')"
+          if [ -z "$n" ]; then
+            n="$(printf '%s' "$PR_BODY" | grep -oiE 'closes #[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)"
+          fi
+          [ -n "$n" ] || { echo "対象 Issue を特定できませんでした。"; exit 0; }
+          gh issue edit "$n" --remove-label claude-wip || true

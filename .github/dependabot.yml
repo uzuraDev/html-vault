@@ -16,6 +16,16 @@ updates:
       time: "09:00"
       timezone: "Asia/Tokyo"
 
+  # Workers 版。wrangler は worker/package-lock.json にしか無いので、
+  # ここを登録しないと更新されない。
+  - package-ecosystem: "npm"
+    directory: "/worker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

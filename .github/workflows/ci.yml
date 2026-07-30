@@ -1,0 +1,142 @@
+name: ci
+
+# 自動マージの安全性は「required status checks の質」でしか担保できない。
+# docker.yml の Docker ビルドだけでは JS の構文エラーも i18n キー欠落も検出できないため、
+# 軽量な検証ジョブ(check)と Workers 版の統合テスト(worker-smoke)を必須チェックとして分離する。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # サプライチェーン対策として各アクションはコミットSHAで固定（# 以降が対応バージョン）
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install (Express edition)
+        run: npm ci
+
+      - name: Syntax check (両エディション + MCP)
+        run: |
+          set -euo pipefail
+          node --check server.js
+          node --check setpass.js
+          node --check scripts/build-i18n.mjs
+          node --check worker/src/worker.js
+          node --check worker/setpass.mjs
+          node --check worker/scripts/seed-demo.mjs
+          node --check worker/test/http-smoke.mjs
+          node --check mcp/server.mjs
+
+      - name: i18n build (en / ja) — キー欠落を失敗扱いにする
+        run: |
+          set -euo pipefail
+          for lang in en ja; do
+            out="$(APP_LANG="$lang" node scripts/build-i18n.mjs 2>&1)"
+            printf '%s\n' "$out"
+            # build-i18n.mjs は未定義キーを warn するだけで exit 0 なので、CI 側で落とす
+            # （scripts/build-i18n.mjs:37 の console.warn を検出）
+            if printf '%s' "$out" | grep -q '未定義のプレースホルダ'; then
+              echo "::error file=locales/${lang}.json::APP_LANG=${lang} でプレースホルダが未解決です"
+              exit 1
+            fi
+          done
+
+      - name: Boot smoke (Express 版が起動して HTTP を返すか)
+        env:
+          SESSION_SECRET: ci-only-not-a-real-secret-0123456789abcdef0123456789abcdef
+          AUTH_PASSWORD: ci-only-password-not-used-anywhere
+          HOST: 127.0.0.1
+          PORT: "3999"
+        run: |
+          set -euo pipefail
+          DATA_DIR="$(mktemp -d)"; export DATA_DIR
+          APP_LANG=en node scripts/build-i18n.mjs
+          node server.js & pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          code=000
+          for _ in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3999/" || true)"
+            [ -n "$code" ] && [ "$code" != "000" ] && break
+            sleep 1
+          done
+          echo "GET / -> ${code}"
+          case "$code" in
+            2*|3*) : ;;
+            *) echo "::error::サーバーが起動しませんでした (HTTP ${code})"; exit 1 ;;
+          esac
+
+  worker-smoke:
+    name: worker-smoke
+    # worker/test/http-smoke.mjs はこのリポジトリで唯一の統合テストで、
+    # CSRF 契約 / DEMO_MODE の 403 / セキュリティヘッダを検証している。
+    # CONTRIBUTING.md の "Keep intact" を機械的に守らせる唯一の手段なので必須チェックに入れる。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install (Workers edition)
+        working-directory: worker
+        run: npm ci
+
+      - name: Seed .dev.vars
+        working-directory: worker
+        # http-smoke.mjs は .dev.vars に SESSION_SECRET と AUTH_HASH があることを前提にする
+        # （ログインパスワードは HV_PASSWORD の既定値 demo-test-pass-1234 と一致させる）。
+        #
+        # setpass.mjs --local には pipe できない。readline を2回 createInterface しており、
+        # 1回目の close() で消費済みの stdin から2回目が読めず、exit 0 のまま無言で終了する
+        # （プロンプトだけ出て AUTH_HASH が書かれない）。CI ではハッシュを直接生成する。
+        # 形式は worker/src/worker.js:64-68 の検証側に合わせる:
+        #   {"iter":N,"salt":<base64url>,"hash":<base64url>} / PBKDF2-SHA256 / 256bit
+        run: |
+          set -euo pipefail
+          printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)" > .dev.vars
+          node --input-type=module -e '
+            import { writeFileSync } from "node:fs";
+            const ITER = 100000; // workerd の PBKDF2 上限
+            const b64u = (b) => Buffer.from(b).toString("base64")
+              .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+            const salt = crypto.getRandomValues(new Uint8Array(16));
+            const km = await crypto.subtle.importKey(
+              "raw", new TextEncoder().encode("demo-test-pass-1234"), "PBKDF2", false, ["deriveBits"]);
+            const bits = await crypto.subtle.deriveBits(
+              { name: "PBKDF2", salt, iterations: ITER, hash: "SHA-256" }, km, 256);
+            const record = JSON.stringify({ iter: ITER, salt: b64u(salt), hash: b64u(new Uint8Array(bits)) });
+            writeFileSync(".dev.vars", "AUTH_HASH=" + record + "\n", { flag: "a" });
+          '
+          grep -q '^SESSION_SECRET=' .dev.vars
+          grep -q '^AUTH_HASH=' .dev.vars
+
+      - name: Run smoke test
+        working-directory: worker
+        run: npm test

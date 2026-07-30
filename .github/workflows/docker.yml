@@ -14,6 +14,12 @@ permissions:
   contents: read
   packages: write
 
+# PR に追記コミットが続くと QEMU のマルチアーキビルドが積み上がるので、
+# PR のときだけ古い run を打ち切る。main / タグの publish は絶対に打ち切らない。
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
