@@ -112,11 +112,30 @@ jobs:
         working-directory: worker
         # http-smoke.mjs は .dev.vars に SESSION_SECRET と AUTH_HASH があることを前提にする
         # （ログインパスワードは HV_PASSWORD の既定値 demo-test-pass-1234 と一致させる）。
-        # setpass.mjs --local は新パスワードを2回読むだけなので pipe で通る。
+        #
+        # setpass.mjs --local には pipe できない。readline を2回 createInterface しており、
+        # 1回目の close() で消費済みの stdin から2回目が読めず、exit 0 のまま無言で終了する
+        # （プロンプトだけ出て AUTH_HASH が書かれない）。CI ではハッシュを直接生成する。
+        # 形式は worker/src/worker.js:64-68 の検証側に合わせる:
+        #   {"iter":N,"salt":<base64url>,"hash":<base64url>} / PBKDF2-SHA256 / 256bit
         run: |
           set -euo pipefail
           printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)" > .dev.vars
-          printf 'demo-test-pass-1234\ndemo-test-pass-1234\n' | node setpass.mjs --local
+          node --input-type=module -e '
+            import { writeFileSync } from "node:fs";
+            const ITER = 100000; // workerd の PBKDF2 上限
+            const b64u = (b) => Buffer.from(b).toString("base64")
+              .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+            const salt = crypto.getRandomValues(new Uint8Array(16));
+            const km = await crypto.subtle.importKey(
+              "raw", new TextEncoder().encode("demo-test-pass-1234"), "PBKDF2", false, ["deriveBits"]);
+            const bits = await crypto.subtle.deriveBits(
+              { name: "PBKDF2", salt, iterations: ITER, hash: "SHA-256" }, km, 256);
+            const record = JSON.stringify({ iter: ITER, salt: b64u(salt), hash: b64u(new Uint8Array(bits)) });
+            writeFileSync(".dev.vars", "AUTH_HASH=" + record + "\n", { flag: "a" });
+          '
+          grep -q '^SESSION_SECRET=' .dev.vars
+          grep -q '^AUTH_HASH=' .dev.vars
 
       - name: Run smoke test
         working-directory: worker
