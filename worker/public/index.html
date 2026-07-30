@@ -440,7 +440,24 @@ window.addEventListener('message', (e)=>{
   }
 });
 
+// index (メタ一覧) はサーバー側で「読んで・直して・全体を書き戻す」方式なので、
+// 変更系リクエストが重なると、後から始まった方が古いスナップショットを書き戻して
+// 先に成功した更新を消す。並べ替えの保存は dragend から投げっぱなしで走るため、
+// 続けてピン留め・編集・削除・再ドラッグを操作すると単一タブでも競合する。
+// UI から出す変更系は1本のキューに並べ、前段の完了を待ってから次を送る。
+// (別タブ・別端末からの同時更新までは防げない。README の Limitations を参照)
+let mutationQueue = Promise.resolve();
+function enqueueMutation(task){
+  const run = mutationQueue.then(task, task); // 前段が失敗しても後続は流す
+  mutationQueue = run.then(()=>{}, ()=>{});
+  return run;
+}
 async function api(method, url, body, isForm, signal){
+  // 検索(GET)は打ち切り前提で並行に投げるので、キューに載せない
+  if(method === 'GET') return apiSend(method, url, body, isForm, signal);
+  return enqueueMutation(()=>apiSend(method, url, body, isForm, signal));
+}
+async function apiSend(method, url, body, isForm, signal){
   const opts = { method, headers:{} };
   if (CSRF && method !== 'GET') opts.headers['x-csrf-token'] = CSRF;
   if (body && !isForm){ opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(body); }
