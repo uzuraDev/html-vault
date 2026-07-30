@@ -394,6 +394,80 @@ async function phaseNormal() {
       `status=${r.status} tools=${tools.map((t) => t.name).join(',')}`
     );
   }
+
+  // --- pin / reorder ---
+  // Pinning only changes ordering, so `updated` must stay put (otherwise pinning
+  // would silently reshuffle the unpinned group, which is sorted by -updated).
+  const listIds = async () => {
+    const r = await req('/api/snippets', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    return b.snippets || [];
+  };
+  {
+    const before = await listIds();
+    const last = before[before.length - 1] || {};
+    const r = await req(`/api/snippets/${last.id}`, {
+      method: 'PUT',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: true }),
+    });
+    const b = await r.json().catch(() => ({}));
+    const after = await listIds();
+    record(
+      'pin: PUT {pinned:true} -> pinned first, updated untouched',
+      r.status === 200 && after[0] && after[0].id === last.id &&
+        b.snippet && b.snippet.updated === last.updated,
+      `first=${last.id} with same updated`,
+      `status=${r.status} first=${after[0] && after[0].id} updated ${last.updated}->${b.snippet && b.snippet.updated}`
+    );
+
+    const un = await req(`/api/snippets/${last.id}`, {
+      method: 'PUT',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: false }),
+    });
+    const restored = await listIds();
+    record(
+      'pin: PUT {pinned:false} -> back to its previous slot',
+      un.status === 200 && restored[restored.length - 1] &&
+        restored[restored.length - 1].id === last.id,
+      `last=${last.id}`,
+      `status=${un.status} last=${restored[restored.length - 1] && restored[restored.length - 1].id}`
+    );
+  }
+  {
+    const before = await listIds();
+    const reversed = before.map((s) => s.id).reverse();
+    const r = await req('/api/snippets/order', {
+      method: 'PUT',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: reversed }),
+    });
+    const after = await listIds();
+    record(
+      'order: PUT {ids} -> list follows the given order',
+      r.status === 200 && after.map((s) => s.id).join(',') === reversed.join(','),
+      reversed.join(','),
+      `status=${r.status} got=${after.map((s) => s.id).join(',')}`
+    );
+  }
+  {
+    const r = await req('/api/snippets/order', {
+      method: 'PUT',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: ['not-a-valid-id'] }),
+    });
+    check('order: invalid ids -> 400', r.status, 400);
+  }
+  {
+    // /api/snippets/order is matched before the /:id route, so it needs its own CSRF check.
+    const r = await req('/api/snippets/order', {
+      method: 'PUT',
+      headers: { ...authH, 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [] }),
+    });
+    check('order: without csrf -> 403', r.status, 403);
+  }
 }
 
 // ===========================================================================
@@ -438,6 +512,14 @@ async function phaseDemo() {
       body: JSON.stringify({ title: 'x' }),
     });
     check('demo: PUT /api/snippets/:id -> 403', r.status, 403);
+  }
+  {
+    const r = await req('/api/snippets/order', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [shared.id] }),
+    });
+    check('demo: PUT /api/snippets/order -> 403', r.status, 403);
   }
   check(
     'demo: DELETE /api/snippets/:id -> 403',
