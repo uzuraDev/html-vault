@@ -16,3 +16,9 @@ deploy
 fly.toml
 railway.json
 render.yaml
+
+# CI 専用のもの。Dockerfile は scripts/ ごと COPY するので、
+# ここで除外しないと検査スクリプトまで本番イメージに焼き込まれる
+# （scripts/ で実行時に要るのは build-i18n.mjs だけ）。
+test
+scripts/check-inline-js.mjs

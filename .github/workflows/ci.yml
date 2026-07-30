@@ -1,8 +1,21 @@
 name: ci
 
-# 自動マージの安全性は「required status checks の質」でしか担保できない。
+# このリポジトリの品質ゲートの実体。
 # docker.yml の Docker ビルドだけでは JS の構文エラーも i18n キー欠落も検出できないため、
-# 軽量な検証ジョブ(check)と Workers 版の統合テスト(worker-smoke)を必須チェックとして分離する。
+# 検証ジョブ(check)と Workers 版の統合テスト(worker-smoke)を必須チェックとして分離する。
+# Dependabot PR は人間の目を通さず自動マージされるので、ここの質がそのまま main の質になる。
+#
+# ⚠️ このワークフローが存在するだけでは何も守れない。
+#    ジョブが緑かどうかとマージできるかどうかは別で、後者はブランチ保護の
+#    required status checks に登録されているものだけで決まる。
+#    2026-07-31 時点の main は `build`(docker.yml) しか必須にしておらず、
+#    check / worker-smoke は登録されていない。この状態では Dependabot PR が
+#    check を落としたまま `build` の成功だけで自動マージされうる。
+#    Settings > Branches で `check` と `worker-smoke` を必須に追加すること。
+#    https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request
+#
+# 登録したあとはジョブ名を変えないこと（名前で照合するので、変えると保護が空振りする）。
+# audit は意図的に必須チェックに入れていない（理由は audit ジョブの直上に書いた）。
 
 on:
   push:
@@ -10,12 +23,15 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
+# PR に追記コミットが続くと古い run が積み上がるので、PR のときだけ打ち切る。
+# main への push は打ち切らない（連続マージで run が消えると「緑の履歴」が欠け、
+# どのコミットが検証済みか後から追えなくなる）。docker.yml と同じ方針。
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
   check:
@@ -36,17 +52,34 @@ jobs:
       - name: Install (Express edition)
         run: npm ci
 
-      - name: Syntax check (両エディション + MCP)
+      - name: Syntax check (追跡下の全 .js / .mjs)
+        # 対象をハードコードすると、新しく追加された .mjs が検査対象から漏れる。
+        # git の追跡ファイルから列挙すれば追加漏れが起きず、node_modules は
+        # git 管理外なので何も書かなくても除外される。
+        # -z / read -d '' はファイル名に空白が入っても壊れないようにするため。
+        # パイプではなくプロセス置換にしているのは、サブシェルだと count が親に返らないため。
         run: |
           set -euo pipefail
-          node --check server.js
-          node --check setpass.js
-          node --check scripts/build-i18n.mjs
-          node --check worker/src/worker.js
-          node --check worker/setpass.mjs
-          node --check worker/scripts/seed-demo.mjs
-          node --check worker/test/http-smoke.mjs
-          node --check mcp/server.mjs
+          count=0
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+            count=$((count + 1))
+          done < <(git ls-files -z '*.js' '*.mjs')
+          echo "syntax checked: ${count} file(s)"
+          # 列挙が壊れて0件でも成功扱いになる「空振り成功」を潰しておく
+          if [ "$count" -eq 0 ]; then
+            echo "::error::検査対象の .js / .mjs が1件も見つかりませんでした"
+            exit 1
+          fi
+
+      - name: Inline JS check (HTML 内の <script>)
+        # UI の実装の大半は public/index.template.html と worker/public/index.html の
+        # インライン <script> にあり、node --check の対象外だった。
+        # （行数は変動するのでここには書かない。実測値はチェッカーが実行時に出力する）
+        # 構文エラーで画面が真っ白でも CI が緑になるので、専用チェッカーで塞ぐ。
+        run: |
+          set -euo pipefail
+          npm run check:inline-js
 
       - name: i18n build (en / ja) — キー欠落を失敗扱いにする
         run: |
@@ -62,37 +95,78 @@ jobs:
             fi
           done
 
-      - name: Boot smoke (Express 版が起動して HTTP を返すか)
-        env:
-          SESSION_SECRET: ci-only-not-a-real-secret-0123456789abcdef0123456789abcdef
-          AUTH_PASSWORD: ci-only-password-not-used-anywhere
-          HOST: 127.0.0.1
-          PORT: "3999"
+      - name: HTTP smoke (Express 版)
+        # 以前は「GET / が 2xx か 3xx なら合格」だった。これは 500 以外を通すのと大差なく、
+        # ログイン・CSRF・レート制限が壊れていても緑になる。
+        # test/http-smoke.mjs は worker 版と同じ粒度でエンドポイントの契約を検証する。
+        #
+        # env を渡していないのは意図的。このテストは自己完結していて、
+        # DATA_DIR(mkdtemp) / PORT / SESSION_SECRET / AUTH_PASSWORD をすべて自前で決め、
+        # server.js の起動と停止も持つ。i18n のビルドもテスト内で走らせる。
+        # ここで環境変数を足すと期待値と食い違うだけなので何も渡さない。
         run: |
           set -euo pipefail
-          DATA_DIR="$(mktemp -d)"; export DATA_DIR
-          APP_LANG=en node scripts/build-i18n.mjs
-          node server.js & pid=$!
-          trap 'kill "$pid" 2>/dev/null || true' EXIT
-          code=000
-          for _ in $(seq 1 30); do
-            code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3999/" || true)"
-            [ -n "$code" ] && [ "$code" != "000" ] && break
-            sleep 1
-          done
-          echo "GET / -> ${code}"
-          case "$code" in
-            2*|3*) : ;;
-            *) echo "::error::サーバーが起動しませんでした (HTTP ${code})"; exit 1 ;;
-          esac
+          npm test
+
+  # ---------------------------------------------------------------------------
+  # audit は required status check に登録してはいけない。
+  #
+  # npm audit の結果はリポジトリの中身ではなく、npm advisory DB の内容と
+  # registry.npmjs.org の可用性という外部の可変入力で決まる。これを必須チェックにすると、
+  # express や helmet に high 勧告が新規公開された瞬間、あるいはレジストリが一時的に落ちた
+  # だけで、脆弱性と無関係な PR まで含めて全オープン PR のマージが一律で止まる。
+  # 「リポジトリを直せば緑にできる」性質を持たないものを必須チェックにしない、という判断。
+  #
+  # このジョブは PR 画面で赤く見えるだけで、マージはブロックしない位置づけ。
+  # 依存の更新そのものは Dependabot の役割で、そこで上げた PR を check が検証する。
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      # npm audit は package-lock.json さえあれば npm ci なしで走る。
+      # 依存のインストールが要らないぶん check とは独立に短時間で回せる。
+      - name: npm audit (Express edition / 本番依存のみ)
+        # --omit=dev の理由: devDependencies の脆弱性は配布物（Docker イメージ /
+        # Workers バンドル）に載らない。ここで見たいのは利用者に届く依存だけ。
+        # --audit-level=high 未満（moderate 以下）は報告を止めるほどではないので通す。
+        run: |
+          set -euo pipefail
+          npm audit --omit=dev --audit-level=high
+
+      - name: npm audit (Workers edition / 本番依存のみ)
+        working-directory: worker
+        # 正直に書いておくと、このステップは現時点では空振りする。
+        # worker/package.json は dependencies を持たず devDependencies: { wrangler } だけなので、
+        # --omit=dev を付けた時点で監査対象が空になり、必ず 0 件で通る。
+        # 残しているのは、将来 worker に本番依存が入ったときに自動で監査が効き始める保険として。
+        #
+        # wrangler(devDep) 経由では sharp の high が出るが、wrangler はビルド時ツールで
+        # Workers バンドルには載らないため意図的に対象外にしている（我々の手では直せず、
+        # 対象に含めると CI が恒常的に赤くなるだけ）。
+        #
+        # なお mcp/ は本番依存(@modelcontextprotocol/sdk, zod)を持つのに package-lock.json が
+        # 無いため、npm audit の対象にできず現状は完全に監査外になっている。
+        run: |
+          set -euo pipefail
+          npm audit --omit=dev --audit-level=high
 
   worker-smoke:
     name: worker-smoke
-    # worker/test/http-smoke.mjs はこのリポジトリで唯一の統合テストで、
-    # CSRF 契約 / DEMO_MODE の 403 / セキュリティヘッダを検証している。
-    # CONTRIBUTING.md の "Keep intact" を機械的に守らせる唯一の手段なので必須チェックに入れる。
+    # worker/test/http-smoke.mjs は CSRF 契約 / DEMO_MODE の 403 / セキュリティヘッダを検証する。
+    # CONTRIBUTING.md の "Keep intact" を機械的に守らせる手段なので必須チェックに入れる。
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # このテストは 3 フェーズそれぞれ最大 90 秒の起動待ちを持つので、悪条件だと1回で 4〜5 分かかる。
+    # 下のリトライで最悪その2倍になるため、15 分だと余裕がない。20 分にしておく。
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,4 +213,22 @@ jobs:
 
       - name: Run smoke test
         working-directory: worker
-        run: npm test
+        # このテストは wrangler dev（workerd の実プロセス＋ポート待ち受け）に依存するため、
+        # コードの不具合とは無関係にポート衝突や起動タイムアウトで落ちることがある。
+        # 必須チェックなので、その手のノイズで PR を止めないよう1回だけ再試行する。
+        #
+        # 再試行では HV_PORT を変える。test/http-smoke.mjs は既定 8799 の固定ポートで
+        # wrangler dev を起動するため、1回目が workerd のプロセス残留でポートを掴んだまま
+        # 落ちた場合、同じポートで再試行しても同じ理由で落ちるだけで意味がない。
+        # ポートをずらして初めて「ポート衝突による flaky」を救える。
+        #
+        # ただし再試行は不安定さを隠す行為なので、1回目の失敗はログと warning に必ず残す
+        # （warning が続くようならリトライではなくテスト側を直す合図）。
+        # 新しい retry アクションは足さない（SHA ピン留めの管理対象を増やさないため）。
+        run: |
+          set -euo pipefail
+          if npm test; then
+            exit 0
+          fi
+          echo "::warning::worker-smoke が1回目(HV_PORT=8799)で失敗したため HV_PORT=8899 で再試行する（flaky か本物の失敗かはログを確認すること）"
+          HV_PORT=8899 npm test

@@ -1,5 +1,11 @@
 name: dependabot auto-merge
 
+# Dependabot の PR に auto-merge（必須チェックが全部緑になったら squash マージ）を仕掛ける。
+# マージの可否を決めるのはこのワークフローではなく、main のブランチ保護の required status checks。
+#
+# pull_request_target を使っているのは、fork 相当の実行コンテキストになる Dependabot の PR でも
+# 書き込み権限のトークンが要るため。PR のコードは一切 checkout せず gh CLI しか叩かないので、
+# 攻撃者のコードがこの権限で動くことはない。
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
@@ -18,24 +24,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
+          set -euo pipefail
           if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
-            exit 0
+            echo "auto-merge は既に有効です。"; exit 0
           fi
-
           set +e
-          output="$(gh pr merge "$PR_URL" --auto --squash 2>&1)"
+          out="$(gh pr merge "$PR_URL" --auto --squash 2>&1)"
           status=$?
           set -e
-
-          if [ "$status" -eq 0 ]; then
-            exit 0
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            # ⚠️ ここで即時マージ（gh pr merge --squash）にフォールバックしないこと。
+            #    有効化が失敗する典型は "Pull request is in clean status"、
+            #    つまり必須チェックが1つも無い＝ブランチ保護が効いていない状態。
+            #    そこで即時マージすると、検証ゼロのまま main に入る経路になる。
+            #    ruleset が外れた瞬間に静かに危険になるので、失敗させて人間に気づかせる。
+            echo "::error::auto-merge を有効化できませんでした。main のブランチ保護（required status checks: check, worker-smoke, build）と Settings > General > Allow auto-merge を確認してください。"
+            exit "$status"
           fi
-
-          printf '%s\n' "$output"
-
-          if printf '%s\n' "$output" | grep -q "Pull request is in clean status"; then
-            gh pr merge "$PR_URL" --squash
-            exit 0
-          fi
-
-          exit "$status"
