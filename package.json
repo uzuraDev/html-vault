@@ -9,7 +9,9 @@
   "scripts": {
     "build:i18n": "node scripts/build-i18n.mjs",
     "start": "npm run build:i18n && node server.js",
-    "setpass": "node setpass.js"
+    "setpass": "node setpass.js",
+    "test": "node test/http-smoke.mjs",
+    "check:inline-js": "node scripts/check-inline-js.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",
