@@ -1,0 +1,78 @@
+name: claude
+
+# 人間が @claude とメンションしたときだけ動く対話用ワークフロー。
+# 公式 Claude GitHub App (https://github.com/apps/claude) 経由で GitHub を操作するため
+# github_token は渡さず、代わりに id-token: write が必要。
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+permissions: {}
+
+jobs:
+  claude:
+    # 公開リポジトリなので、bot 起因のイベントでは起動しない。
+    # claude-pr-review が投稿する総評に @claude が含まれると issue_comment が発火し、
+    # action 側で弾かれる前に checkout まで走ってしまうため、ワークフロー段階で止める。
+    if: |
+      vars.CLAUDE_AGENT_ENABLED == 'true' &&
+      github.event.sender.type != 'Bot' && (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read # CI 結果を Claude が読めるようにする
+      id-token: write # 公式 Claude App のトークン交換に必須
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # issue_comment イベントの github.ref は既定ブランチなので、そのままだと
+          # PR に @claude と書いても main のコードを読んでしまう。head を取れるよう全履歴を引く。
+          fetch-depth: 0
+
+      - name: Checkout PR head (PR 上のコメントの場合)
+        if: github.event.issue.pull_request != null || github.event_name == 'pull_request_review_comment' || github.event_name == 'pull_request_review'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # fork の PR は checkout しない（untrusted code を workspace ルートに置かない）
+          same="$(gh pr view "$PR" --json headRepositoryOwner,isCrossRepository --jq '.isCrossRepository')"
+          if [ "$same" = "true" ]; then
+            echo "::notice::fork からの PR なので head は checkout しません。"
+            exit 0
+          fi
+          ref="$(gh pr view "$PR" --json headRefName --jq '.headRefName')"
+          git fetch --no-tags origin "$ref"
+          git checkout -B "$ref" "origin/${ref}"
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1.0.183
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          additional_permissions: |
+            actions: read
+          # allowed_bots は空(既定)のまま。'*' にすると公開リポジトリでは
+          # 外部の GitHub App がこの action を任意プロンプトで起動できてしまう。
+          claude_args: |
+            --max-turns 25
+            --model sonnet
+            --allowedTools "Bash(npm ci),Bash(npm run build:i18n),Bash(node --check:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*)"
+            --append-system-prompt "html-vault は Express 版(server.js)と Cloudflare Workers 版(worker/)の2エディション同居。片方だけ直して終わらせない。CONTRIBUTING.md の Keep intact（CSRFトークン / sandbox プレビューに allow-same-origin を付けない / ログインのレート制限 / helmet・CSP / サーバー生成のファイルID）を絶対に壊さない。ユーザー向け文言は locales/en.json と locales/ja.json の両方に追加する。依存関係は増やさない。"
