@@ -40,8 +40,42 @@ npm run dev                      # http://localhost:8787
 | `MCP_SECRET_PATH` | Secret (optional) | Enables the remote MCP endpoint at `/mcp/<value>`. |
 | `SECURITY_CONTACT` | Secret (optional) | Served in `/.well-known/security.txt` (e.g. `mailto:you@example.com`). Unset = 404. |
 | `DEMO_MODE` | Var (optional) | `"1"` = public read-only demo; all writes return 403. **All reads become public** — only enable it on a dedicated demo KV namespace, never on your real vault. |
+| `SESSION_REVOCATIONS` | Durable Object (optional) | Moves the logout revocation list from KV to a Durable Object. See below. |
 
 To seed a demo instance with sample pages, see `scripts/seed-demo.mjs` (seed a dedicated, empty demo namespace only).
+
+### Strongly consistent logout (optional)
+
+Logout records the revoked session so a copied cookie cannot be replayed. By default that
+record goes to KV, which is eventually consistent — for up to about 60 seconds the old
+cookie can still work at an edge location that has not seen the write yet.
+
+If that window matters to you, uncomment the two blocks in
+[`wrangler.toml`](wrangler.toml):
+
+```toml
+[[durable_objects.bindings]]
+name = "SESSION_REVOCATIONS"
+class_name = "SessionRevocations"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionRevocations"]
+```
+
+Then redeploy. The Worker picks the Durable Object up automatically when the binding
+exists — there is no flag to flip in the code. A DO serializes every read and write
+through one instance, so logout takes effect everywhere the moment it returns.
+
+The trade-off is one extra round trip to the DO on every authenticated request, and the
+DO lives in a single location, so requests from far away pay that latency. For a
+single-user vault where a stolen cookie is the threat you actually care about, that is
+usually worth it; if it is not, leaving the binding out keeps the KV behaviour.
+
+Switching backends does not migrate existing entries. Revocations recorded in KV are not
+visible to the DO (and vice versa), so sessions revoked before the switch may become
+valid again until they expire. Change the password (`npm run setpass`) right after
+switching if that matters — it invalidates every existing session at once.
 
 ## Dependencies
 

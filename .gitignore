@@ -12,3 +12,5 @@ worker/.wrangler/
 worker/.dev.vars
 worker/seed-bulk.json
 worker/wrangler.demo.toml
+# test/http-smoke.mjs が Durable Object フェーズ用に一時生成する設定
+worker/wrangler.do-test.toml
