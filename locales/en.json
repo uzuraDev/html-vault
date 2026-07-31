@@ -7,6 +7,7 @@
     "loginButton": "Log in",
     "badge": "Private",
     "logout": "Log out",
+    "accountMenu": "Account menu",
     "downloadTitle": "Download",
     "pinTitle": "Pin",
     "unpinTitle": "Unpin",
@@ -17,6 +18,7 @@
     "newTitle": "New",
     "backToList": "← List",
     "emptyState": "Select an item on the left, or click ＋ to create one.",
+    "emptyStateNoNew": "Select an item on the left. (Press n to create one.)",
     "modalNewTitle": "New snippet",
     "modalEditTitle": "Edit",
     "fieldTitle": "Title",
@@ -34,7 +36,10 @@
     "expandMenu": "Open menu",
     "noSnippets": "No snippets",
     "confirmDelete": "Delete \"{title}\"?\nThis cannot be undone.",
-    "errorPrefix": "Error"
+    "errorPrefix": "Error",
+    "toastSaved": "Saved",
+    "toastDeleted": "Deleted",
+    "toastOrderFailed": "Could not save the new order"
   },
   "server": {
     "noPassword": "Password is not set. Run setpass first.",
