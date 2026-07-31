@@ -16,6 +16,9 @@ cd /opt/html-vault
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
 
 # 2. 依存 + 言語（日本語は APP_LANG=ja、既定 en）
+#    ＋（新規作成）ボタンを隠すなら、ここで UI_HIDE_NEW=1 も一緒に渡せる。
+#    どちらもこの手順で焼き込む。systemd の Environment= は build:i18n を通らないので、
+#    値を変えたらこのコマンドを実行し直して再起動すること。
 sudo -u htmlvault npm ci --omit=dev
 sudo -u htmlvault APP_LANG=ja npm run build:i18n
 

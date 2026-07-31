@@ -11,11 +11,16 @@ FROM node:26-slim
 
 # 表示言語をビルド時に選択（en/ja）。例: docker build --build-arg APP_LANG=ja .
 ARG APP_LANG=en
+# UI の「＋」（新規作成）を隠すか（0/1）。MCP 中心運用で書き込み導線を出したくない場合に 1。
+# 例: docker build --build-arg UI_HIDE_NEW=1 .
+# APP_LANG と同じくビルド時にしか評価されない（下の build-i18n で焼き込む）。
+ARG UI_HIDE_NEW=0
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
     DATA_DIR=/data \
-    APP_LANG=${APP_LANG}
+    APP_LANG=${APP_LANG} \
+    UI_HIDE_NEW=${UI_HIDE_NEW}
 
 WORKDIR /app
 
@@ -26,7 +31,8 @@ COPY locales ./locales
 COPY scripts ./scripts
 COPY public ./public
 
-# 選択言語で public/index.html を生成（ビルド時に1言語を焼き込む）
+# 選択言語で public/index.html を生成（ビルド時に1言語を焼き込む）。
+# UI_HIDE_NEW もここで評価される。ランタイム env（fly.io の [env] 等）では効かない。
 RUN node scripts/build-i18n.mjs
 
 # データ用ボリューム。非rootの node ユーザーが書き込めるよう所有権を付与。
