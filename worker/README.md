@@ -66,11 +66,16 @@ node -e "const p=require('./package-lock.json').packages;for(const k of ['node_m
 ```
 
 A **prerelease** (`-alpha` / `-beta` / `-rc`) there can break local development and the
-smoke test, and no audit finding justifies taking one. **The command above is the source
-of truth — the versions named here go stale.** At the time of writing (2026-07-31,
-wrangler 4.116.0) both were stable (`miniflare 4.x`, `workerd 1.x`), and wrangler 4.117.0
-moved `miniflare` to a `5.x-alpha`; that is the shape of the problem, not a standing fact.
-Check the tree yourself before deciding on a bump:
+smoke test, so a bump that brings one in has to earn its place: run the smoke test and the
+dry-run build against it, and only take it if both pass. Nothing prereleased reaches
+production — `wrangler`, `miniflare` and `workerd` are devDependencies, and the deployed
+Worker runs on Cloudflare's own runtime. The blast radius is local development and CI,
+both of which fail loudly.
+
+**The command above is the source of truth — the versions named here go stale.** At the
+time of writing (2026-08-01, wrangler 4.118.0) `miniflare` is `5.20260730.0-alpha` and
+`workerd` is `1.20260730.1`; the alpha was taken deliberately after the smoke test passed
+62/62 against it. Check the tree yourself before deciding on a bump:
 
 ```sh
 npm view wrangler@<version> dependencies   # what the candidate pulls in

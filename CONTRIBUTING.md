@@ -46,12 +46,14 @@ Build-time dependencies (`wrangler` and its tree) are triaged separately from ru
 they are not part of the Docker image or the Worker bundle, so an advisory there is not
 user-facing and is usually not worth forcing a version.
 
-When reviewing a dependency bump, weigh the risk against the payoff. A bump with **no**
-security content that pulls a **prerelease** (`-alpha` / `-beta` / `-rc`) into the local dev
-runtime — `miniflare` / `workerd`, which back `wrangler dev` and therefore the
-`worker-smoke` test — is not worth taking. Wait for the stable release. Dependabot PRs
-auto-merge once the required checks pass, so if `worker-smoke` is not registered in the
-branch protection, nothing will catch that on your behalf.
+When reviewing a dependency bump, weigh the risk against the payoff. A bump that pulls a
+**prerelease** (`-alpha` / `-beta` / `-rc`) into the local dev runtime — `miniflare` /
+`workerd`, which back `wrangler dev` and therefore the `worker-smoke` test — has to earn
+its place: run the smoke test and the dry-run build against it first, and take it only if
+both pass. Nothing prereleased reaches users; those packages are devDependencies and the
+deployed Worker runs on Cloudflare's own runtime. Dependabot PRs auto-merge once the
+required checks pass, so if `worker-smoke` is not registered in the branch protection,
+nothing will catch a broken dev runtime on your behalf.
 
 When you do take a `/worker` bump, verify it locally before merging: `npm test` (spawns
 `wrangler dev`) and `npx wrangler deploy --dry-run` (bundles without uploading), both in
