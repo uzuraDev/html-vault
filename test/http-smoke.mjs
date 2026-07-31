@@ -765,6 +765,50 @@ async function phaseNormal() {
     }
   }
   {
+    // 保存する HTML の入力契約: Tab/LF/CR 以外の C0 制御文字は受け付けない。
+    // 体裁の問題ではなく、JSON の外枠 (保存上限の2倍) が成り立つための前提。
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'CtrlChars', html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: 制御文字を含む本文の作成 -> 400', r.status, 400);
+  }
+  {
+    // 制御文字は JSON で6バイトのエスケープ表記へ展開されるので、4MiB の本文が
+    // 25MB のリクエストになる。契約で禁じている本文なので、外枠 (2倍) を超えた
+    // 時点でパース前に落として構わない。保存できる本文が外枠で拒まれることは無い。
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'NullHeavy', html: NUL.repeat(4 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('contract: 4MiB の制御文字本文 -> 413 (外枠で拒否)', r.status, 413);
+  }
+  {
+    // 更新経路にも同じ契約をかける (作成だけ塞いでも意味がない)。
+    const NUL = String.fromCharCode(0);
+    const c = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'CtrlUpdateTarget', html: '<p>ok</p>' }),
+    });
+    const cb = await c.json().catch(() => ({}));
+    const id = cb.snippet && cb.snippet.id;
+    const r = await req('/api/snippets/' + id, {
+      method: 'PUT',
+      headers: jsonCsrf,
+      body: JSON.stringify({ html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: 制御文字を含む本文への更新 -> 400', r.status, 400);
+    if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
+  }
+  {
     // 413 で弾かれた作成が保存されていないことの裏取り。
     const r = await req('/api/snippets', { headers: authH });
     const b = await r.json().catch(() => ({}));
@@ -774,7 +818,10 @@ async function phaseNormal() {
       !titles.includes('TooBigToStore') &&
         !titles.includes('WayTooBig') &&
         !titles.includes('BigButAllowed') &&
-        !titles.includes('QuoteHeavy'),
+        !titles.includes('QuoteHeavy') &&
+        !titles.includes('CtrlChars') &&
+        !titles.includes('NullHeavy') &&
+        !titles.includes('CtrlUpdateTarget'),
       '413 になった2件も、作成後に削除した2件も含まない',
       titles.join(',') || '(空)'
     );

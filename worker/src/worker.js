@@ -30,8 +30,11 @@ const MAX_BYTES = 10 * 1024 * 1024;
 //   改行・タブは \n \t の2バイト、非ASCII は UTF-8 のまま素通り
 // つまり「10MB以内の HTML」を包む外枠として MAX_BYTES + 少しでは足りず、正当な
 // アップロードを 413 にしてしまう。JSON 経路だけ2倍側の外枠を使う。
-// (\u00XX に展開される制御文字は6倍まで膨らむが、それらは保存対象の HTML には
-//  現れない。仮に来ても弾かれるのは「JSON にすると60MB級」の本文だけ。)
+//
+// 2倍で足りるのは、htmlContractError() が「Tab/LF/CR 以外の C0 制御文字」を保存対象から
+// 排除しているから。それらは JSON で6バイトのエスケープ表記へ展開され、2倍の見積りを
+// 壊す。契約と外枠は必ずセットで直すこと (片方だけ緩めると、保存できるのに外枠で
+// 弾かれる本文が生まれる)。
 const REQUEST_HEADROOM_BYTES = 256 * 1024;
 const MAX_REQUEST_BYTES = MAX_BYTES + REQUEST_HEADROOM_BYTES;
 const MAX_JSON_REQUEST_BYTES = MAX_BYTES * 2 + REQUEST_HEADROOM_BYTES;
@@ -256,6 +259,18 @@ async function readJsonObject(req, maxBytes) {
   if (r.tooLarge) return { tooLarge: true };
   const v = r.value;
   return { value: v && typeof v === 'object' && !Array.isArray(v) ? v : {} };
+}
+
+// 保存する HTML の入力契約。
+// Tab / LF / CR 以外の C0 制御文字を拒否する。理由は2つある:
+//   1. HTML として不正 (HTML Standard では NUL などの制御文字はパースエラー)
+//   2. JSON にすると 1 バイトが \u00XX の 6 バイトへ膨らみ、リクエスト本文の外枠
+//      (MAX_JSON_REQUEST_BYTES = 保存上限の2倍) の見積りを壊す
+// この契約があるおかげで、JSON エスケープの膨張は " と \\ と改行類の 2 倍で頭打ちになり、
+// 「保存できる本文なら必ず外枠に収まる」が成り立つ (外枠が正当な保存を拒まない)。
+const FORBIDDEN_CTRL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+function htmlContractError(body) {
+  return FORBIDDEN_CTRL_RE.test(body) ? 'Contains control characters that are not valid in HTML.' : null;
 }
 
 // ---- utils ----
@@ -497,6 +512,8 @@ async function createSnippet(env, { html, title, tags }) {
   const body = typeof html === 'string' ? html : '';
   if (!body.trim()) return { error: 'Content is empty.', status: 400 };
   if (byteLen(body) > MAX_BYTES) return { error: 'Exceeds the 10MB size limit.', status: 413 };
+  const contractError = htmlContractError(body);
+  if (contractError) return { error: contractError, status: 400 };
   const id = newId();
   await env.VAULT.put('snip:' + id, body);
   const now = Date.now();
@@ -1090,6 +1107,8 @@ export default {
         let contentChanged = false;
         if (typeof b.html === 'string') {
           if (byteLen(b.html) > MAX_BYTES) return json({ error: 'Exceeds the 10MB size limit.' }, 413);
+          const contractError = htmlContractError(b.html);
+          if (contractError) return json({ error: contractError }, 400);
           await env.VAULT.put('snip:' + id, b.html);
           // 本文が変わったので検索用テキストのキャッシュを捨てる。
           // (版キーの updated/bytes でも大抵は検知できるが、同一ミリ秒・同一バイト長の

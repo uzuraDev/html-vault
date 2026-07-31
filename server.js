@@ -66,8 +66,11 @@ const SMALL_BODY_LIMIT = `${SMALL_BODY_BYTES}b`;
 //   改行・タブは \n \t の2バイト、非ASCII は UTF-8 のまま素通り
 // つまり「10MB以内の HTML」を包む外枠として MAX_UPLOAD_BYTES + 少しでは足りず、
 // 正当なアップロードを 413 にしてしまう。JSON 経路だけ2倍側の外枠を使う。
-// (\u00XX に展開される制御文字は6倍まで膨らむが、それらは保存対象の HTML には
-//  現れない。仮に来ても弾かれるのは「JSON にすると60MB級」の本文だけ。)
+//
+// 2倍で足りるのは、htmlContractError() が「Tab/LF/CR 以外の C0 制御文字」を保存対象から
+// 排除しているから。それらは JSON で6バイトのエスケープ表記へ展開され、2倍の見積りを
+// 壊す。契約と外枠は必ずセットで直すこと (片方だけ緩めると、保存できるのに外枠で
+// 弾かれる本文が生まれる)。
 const REQUEST_HEADROOM_BYTES = 256 * 1024;
 const MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + REQUEST_HEADROOM_BYTES;
 const MAX_JSON_REQUEST_BYTES = MAX_UPLOAD_BYTES * 2 + REQUEST_HEADROOM_BYTES;
@@ -631,6 +634,18 @@ function guessTitle(html) {
   return 'Untitled';
 }
 
+// 保存する HTML の入力契約。
+// Tab / LF / CR 以外の C0 制御文字を拒否する。理由は2つある:
+//   1. HTML として不正 (HTML Standard では NUL や C1 を含む制御文字はパースエラー)
+//   2. JSON にすると 1 バイトが \u00XX の 6 バイトへ膨らみ、リクエスト本文の外枠
+//      (MAX_JSON_REQUEST_BYTES = 保存上限の2倍) の見積りを壊す
+// この契約があるおかげで、JSON エスケープの膨張は " と \ と改行類の 2 倍で頭打ちになり、
+// 「保存できる本文なら必ず外枠に収まる」が成り立つ (外枠が正当な保存を拒まない)。
+const FORBIDDEN_CTRL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+function htmlContractError(body) {
+  return FORBIDDEN_CTRL_RE.test(body) ? STR.controlChars : null;
+}
+
 // スニペット作成の共通処理。/api/snippets(POST) と /mcp(upload_html) の両方から呼ぶ。
 // 成功で { meta } を、入力不正で { error, status } を返す。
 function createSnippet({ html, title, tags }) {
@@ -639,6 +654,8 @@ function createSnippet({ html, title, tags }) {
   if (Buffer.byteLength(body, 'utf8') > MAX_UPLOAD_BYTES) {
     return { error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB), status: 413 };
   }
+  const contractError = htmlContractError(body);
+  if (contractError) return { error: contractError, status: 400 };
   const id = newId();
   fs.writeFileSync(snippetPath(id), body, 'utf8');
   const now = Date.now();
@@ -986,6 +1003,8 @@ app.put('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
     if (req.body.html.length > MAX_UPLOAD_BYTES) {
       return res.status(413).json({ error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB) });
     }
+    const contractError = htmlContractError(req.body.html);
+    if (contractError) return res.status(400).json({ error: contractError });
     fs.writeFileSync(file, req.body.html, 'utf8');
     // 本文が変わったら検索用テキストのキャッシュを捨てる。
     // (stat 検証もあるが、mtime の分解能が粗い環境で「同一秒・同一サイズ」の

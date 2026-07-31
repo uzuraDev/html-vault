@@ -62,6 +62,7 @@
     "authInitFromEnv": "✓ AUTH_PASSWORD から初期パスワードを設定しました (data/auth.json)。",
     "authNotSet": "ℹ パスワード未設定です。AUTH_PASSWORD（環境変数）を設定するか `node setpass.js` を実行して再起動してください。設定までログインはできません。",
     "sessionSecretWarn": "ℹ SESSION_SECRET 未設定: 再起動でログアウトされます。",
-    "sessionStoreReady": "✓ セッションストア: data/sessions.json ({count}件を復元)。"
+    "sessionStoreReady": "✓ セッションストア: data/sessions.json ({count}件を復元)。",
+    "controlChars": "HTML として使えない制御文字が含まれています。"
   }
 }

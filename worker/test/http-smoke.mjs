@@ -537,13 +537,58 @@ async function phaseNormal() {
     }
   }
   {
+    // The stored-HTML contract: C0 control characters other than Tab/LF/CR are refused.
+    // This is not cosmetic — it is what makes the 2x JSON envelope sound.
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'CtrlChars', html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: control characters in the body -> 400', r.status, 400);
+  }
+  {
+    // Control characters expand to a 6-byte escape in JSON, so 4MiB of them becomes a
+    // 25MB request. The contract forbids that body anyway, so rejecting it at the
+    // envelope is fine: no storable body is ever refused by the envelope.
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'NullHeavy', html: NUL.repeat(4 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('contract: 4MiB of control characters -> 413 (envelope)', r.status, 413);
+  }
+  {
+    // The update path carries the same contract (guarding create alone is pointless).
+    const NUL = String.fromCharCode(0);
+    const c = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'CtrlUpdateTarget', html: '<p>ok</p>' }),
+    });
+    const cb = await c.json().catch(() => ({}));
+    const id = cb.snippet && cb.snippet.id;
+    const r = await req('/api/snippets/' + id, {
+      method: 'PUT',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: control characters on update -> 400', r.status, 400);
+    if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
+  }
+  {
     // The rejected creates must not have been stored.
     const r = await req('/api/snippets', { headers: authH });
     const b = await r.json().catch(() => ({}));
     const titles = (b.snippets || []).map((s) => s.title);
     record(
       'body-limit: the 413 creates are not stored',
-      !titles.includes('TooBigToStore') && !titles.includes('WayTooBig') && !titles.includes('QuoteHeavy'),
+      !titles.includes('TooBigToStore') && !titles.includes('WayTooBig') && !titles.includes('QuoteHeavy') &&
+        !titles.includes('CtrlChars') && !titles.includes('NullHeavy') && !titles.includes('CtrlUpdateTarget'),
       'list contains none of the rejected or cleaned-up titles',
       titles.join(',') || '(empty)'
     );
