@@ -5,6 +5,9 @@
  *  - パスワード認証 (bcryptハッシュ。平文保存しない)
  *  - ログイン試行レート制限
  *  - セッションCookieは HttpOnly / SameSite=Strict / (HTTPS時)Secure
+ *  - ログアウトはサーバー側のセッション実体 (sessions.json) ごと破棄する
+ *  - セッションはログイン時のパスワードハッシュ指紋を持ち、パスワードを変えると
+ *    (setpass.js 等) 既存セッションは全て無効になる
  *  - 変更系APIはCSRFトークン必須
  *  - アップロードHTMLのプレビューは sandbox iframe で隔離 (本体オリジンで実行させない)
  *  - 生ソースは別エンドポイントで text/plain として返す
@@ -160,6 +163,32 @@ function loadAuth() {
   } catch {
     return null;
   }
+}
+
+// ---- 認証バージョン (パスワード変更で既存セッションを一括失効させる) --------
+// セッションにはログイン時点の「認証バージョン」を焼き込む。auth.json が差し替わる
+// (setpass.js / AUTH_PASSWORD での初期化) とバージョンが変わり、以前に発行した
+// セッションは認証ガードで弾かれて破棄される。
+// サーバー側に失効リストを持たないので、パスワードを変えたプロセスと動いている
+// プロセスが別でも (setpass.js は別プロセス)、再起動を挟んでも成立する。
+// バージョンはハッシュそのものではなく sha256 の先頭16文字。sessions.json に
+// bcrypt ハッシュを写さないため。
+function authVersionOfHash(hash) {
+  const h = typeof hash === 'string' ? hash : '';
+  if (!h) return '';
+  return crypto.createHash('sha256').update(h).digest('hex').slice(0, 16);
+}
+// auth.json の stat が変わらない間だけ再利用する (認証ガードは毎リクエスト通るため)。
+// stat が同一のまま中身だけ差し替わる書き換えは検知できないが、その場合でも
+// パスワードが変わっていればログインし直しで新しいバージョンが入る。
+let authVersionCache = null; // { key, version }
+function authVersion() {
+  const key = statKeyOf(AUTH_FILE);
+  if (authVersionCache && key && authVersionCache.key === key) return authVersionCache.version;
+  const auth = loadAuth();
+  const version = authVersionOfHash(auth && auth.hash);
+  authVersionCache = key ? { key, version } : null;
+  return version;
 }
 
 // ---- ファイルバックドのセッションストア --------------------------------
@@ -389,8 +418,25 @@ function checkCsrf(req, res, next) {
 }
 
 // ---- 認証ガード ----------------------------------------------------------
+// セッションが「今も有効か」を判定する唯一の入口。authed が立っているだけでは
+// 足りず、ログイン時に焼き込んだ認証バージョンが現行と一致することまで見る。
+// ズレていたら (= パスワードが変わった) その場でサーバー側のセッションを破棄する。
+// 破棄すると express-session は req.session を外すので、呼び出し側は false の
+// あとに req.session を触らないこと。
+function sessionAuthed(req) {
+  if (!(req.session && req.session.authed)) return false;
+  const current = authVersion();
+  if (current && req.session.pwv === current) return true;
+  try {
+    req.session.destroy(() => {});
+  } catch {
+    /* 破棄に失敗しても「無効」として扱う */
+  }
+  return false;
+}
+
 function requireAuth(req, res, next) {
-  if (req.session && req.session.authed) return next();
+  if (sessionAuthed(req)) return next();
   return res.status(401).json({ error: STR.unauthorized });
 }
 
@@ -406,8 +452,10 @@ function bearerOk(req) {
 }
 
 // 読み取りAPI用: Bearerトークン or セッションのどちらかでOK。
+// セッション判定を先に通すのは、Bearer で入ってきた場合でも失効済みセッションを
+// ここで破棄しておくため (ハンドラ側の csrf 返却が古いセッションを拾わない)。
 function requireAuthOrToken(req, res, next) {
-  if (bearerOk(req) || (req.session && req.session.authed)) return next();
+  if (sessionAuthed(req) || bearerOk(req)) return next();
   return res.status(401).json({ error: STR.unauthorized });
 }
 
@@ -416,7 +464,7 @@ function requireAuthOrToken(req, res, next) {
 // CSRF の対象外 (ブラウザが自動付与しない = CSRF攻撃の経路にならない)。
 function requireWriteAuth(req, res, next) {
   if (bearerOk(req)) return next();
-  if (!(req.session && req.session.authed)) {
+  if (!sessionAuthed(req)) {
     return res.status(401).json({ error: STR.unauthorized });
   }
   const token = req.get('x-csrf-token');
@@ -519,7 +567,7 @@ function createSnippet({ html, title, tags }) {
 //  認証API
 // ===========================================================================
 app.get('/api/me', (req, res) => {
-  const authed = !!(req.session && req.session.authed);
+  const authed = sessionAuthed(req);
   res.json({ authed, csrf: authed ? ensureCsrf(req) : null });
 });
 
@@ -537,6 +585,9 @@ app.post('/api/login', loginLimiter, (req, res) => {
     req.session.regenerate((e) => {
       if (e) return res.status(500).json({ error: STR.sessionError });
       req.session.authed = true;
+      // 認証したパスワードのバージョンを焼き込む。以後パスワードが変われば
+      // このセッションは認証ガードで弾かれる (= 全セッションが失効する)。
+      req.session.pwv = authVersionOfHash(auth.hash);
       const csrf = ensureCsrf(req);
       res.json({ ok: true, csrf });
     });
@@ -544,7 +595,17 @@ app.post('/api/login', loginLimiter, (req, res) => {
 });
 
 app.post('/api/logout', requireAuth, checkCsrf, (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
+  // destroy でサーバー側 (sessions.json) から実体を消す。あわせて Cookie も
+  // 失効させ、同じ sid が使い回されないようにする。
+  req.session.destroy(() => {
+    res.clearCookie('hv.sid', {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: BEHIND_HTTPS,
+    });
+    res.json({ ok: true });
+  });
 });
 
 // ===========================================================================
@@ -554,7 +615,7 @@ app.post('/api/logout', requireAuth, checkCsrf, (req, res) => {
 // 一覧 (メタデータのみ)
 app.get('/api/snippets', requireAuthOrToken, (req, res) => {
   const list = loadIndex().sort(byDisplayOrder);
-  res.json({ snippets: list, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
+  res.json({ snippets: list, csrf: sessionAuthed(req) ? ensureCsrf(req) : null });
 });
 
 // 全文検索 (タイトル/タグ/本文。本文はHTMLをプレーン化して走査する)
@@ -663,7 +724,7 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
   if (q.length < 2) {
     // 2文字未満は検索しない (空の結果を返す。UI側はクライアント側の絞り込みだけで表示する)
     sendTiming();
-    return res.json({ results: [], q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
+    return res.json({ results: [], q, csrf: sessionAuthed(req) ? ensureCsrf(req) : null });
   }
   // ?excerpt=0: タイトル/タグで既にヒットが確定している行の本文読み込みを省く。
   // 既定 (未指定) は従来どおり本文も読んで抜粋を出す。件数が多い環境向けのオプトイン。
@@ -715,7 +776,7 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
     excerpt,
   }));
   sendTiming();
-  res.json({ results, q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
+  res.json({ results, q, csrf: sessionAuthed(req) ? ensureCsrf(req) : null });
 });
 
 // 作成 (貼り付け or ファイルアップロード)
