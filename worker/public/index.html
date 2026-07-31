@@ -15,6 +15,20 @@
        (.sidebar に直接当てるとモバイルの width:100% に勝ってしまうため) */
     --sb-w:340px;
     color-scheme: dark;
+    /* モーション。値は public/index.template.html と完全に同一にすること */
+    --dur-1:120ms;   /* 状態変化: hover / active / focus / 行アクションの出現 */
+    --dur-2:180ms;   /* 出入り: モーダル、トースト、プレビューのフェード */
+    --ease-out:cubic-bezier(.22,.61,.36,1);
+    --ease-in:cubic-bezier(.55,.06,.68,.19);
+    --ease-std:cubic-bezier(.4,0,.2,1);
+  }
+  /* OSでモーション低減が有効なら、動きは出さず状態変化だけ即座に反映する */
+  @media (prefers-reduced-motion: reduce){
+    :root{ --dur-1:0ms; --dur-2:0ms; }
+    *,*::before,*::after{
+      animation-duration:.01ms!important; animation-iteration-count:1!important;
+      transition-duration:.01ms!important;
+    }
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
@@ -29,9 +43,19 @@
   button.primary:hover{background:var(--accent)}
   button.ghost{background:transparent}
   button.danger{background:transparent;border-color:#5a2b30;color:var(--danger)}
+  button{transition:background-color var(--dur-1) var(--ease-std),
+                   border-color var(--dur-1) var(--ease-std),
+                   color var(--dur-1) var(--ease-std),
+                   transform var(--dur-1) var(--ease-out)}
   button:active{transform:translateY(1px)}
   input,textarea{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;outline:none}
-  input:focus,textarea:focus{border-color:var(--accent)}
+  input,textarea{transition:border-color var(--dur-1) var(--ease-std),
+                            box-shadow var(--dur-1) var(--ease-std)}
+  input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,157,255,.18)}
+  /* outline:none で消した UA のフォーカスリングを、キーボード操作時だけ戻す */
+  button:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
   textarea{resize:vertical;min-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
   /* iOS Safari は font-size 16px 未満の入力欄にフォーカスするとページ全体をズームし、
      blur してもスケールが戻らない (タブにも記憶される)。横向き(852-932px)も含め
@@ -64,7 +88,7 @@
      env() 非対応ブラウザ向けに、素の padding 宣言を必ず先に残しておく。 */
   .sidebar-head{display:flex;align-items:center;gap:8px;padding:11px 12px 11px 14px;border-bottom:1px solid var(--line);padding-top:calc(11px + env(safe-area-inset-top));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
   .sidebar-head h1{flex:1;min-width:0;font-size:14px;margin:0;font-weight:600;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .icon-btn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:9px;background:transparent;border:1px solid var(--line);color:var(--muted);flex:none;transition:color .12s,border-color .12s,background .12s}
+  .icon-btn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:9px;background:transparent;border:1px solid var(--line);color:var(--muted);flex:none;transition:color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std)}
   .icon-btn:hover{color:var(--txt);border-color:var(--accent);background:var(--panel2)}
   .icon-btn svg{width:16px;height:16px;display:block}
   #menuBtn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
@@ -119,19 +143,24 @@
   }
   .list::-webkit-scrollbar-corner,.modal-body::-webkit-scrollbar-corner,
   textarea::-webkit-scrollbar-corner{background:transparent}
-  .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+  .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer;
+        transition:background-color var(--dur-1) var(--ease-std),box-shadow var(--dur-1) var(--ease-std)}
   .item:hover{background:var(--panel2)}
-  .item.active{background:var(--panel2);border-left:3px solid var(--accent)}
+  /* 選択マーカーは border-left ではなく inset box-shadow。border だと幅を占有して
+     選択した瞬間に行の中身が3px右へずれる */
+  .item.active{background:var(--panel2);box-shadow:inset 3px 0 0 var(--accent)}
   /* 右端の行アクションは3つ (ピン/DL/削除) で 8+40+72px。省略記号がその下に潜らないよう余白を取る */
   .item .t{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:100px}
   .item .meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
   /* 行アクション (DL/削除): 通常は隠し、ホバー/選択時に右上へアイコン表示 */
-  .item.dragging{opacity:.45}
-  .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:8px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity .12s,background .12s,color .12s,border-color .12s}
+  .item.dragging{opacity:.45;transition:opacity var(--dur-1) var(--ease-out)}
+  .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:8px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std),color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std)}
   .item .del-item{right:8px}
   .item .dl-item{right:40px}
   .item .pin-item{right:72px}
   .item:hover .del-item,.item.active .del-item,.item:hover .dl-item,.item.active .dl-item,.item:hover .pin-item,.item.active .pin-item{opacity:1}
+  /* キーボードで行アクションに来たときも見えるようにする (opacity:0 のままだとフォーカスリングごと見えない) */
+  .item .del-item:focus-visible,.item .dl-item:focus-visible,.item .pin-item:focus-visible{opacity:1}
   .item .del-item:hover{background:rgba(255,107,107,.14);border-color:#5a2b30;color:var(--danger)}
   .item .dl-item:hover{background:rgba(91,157,255,.14);border-color:var(--accent2);color:var(--accent)}
   .item .pin-item:hover{background:rgba(91,157,255,.14);border-color:var(--accent2);color:var(--accent)}
@@ -150,12 +179,26 @@
   .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left))}
   .tabs button{font-size:13px;padding:6px 12px}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
-  iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0;color-scheme:light}
+  /* プレビューは読み込み完了 (.loaded) までは透明にして、白面のちらつきを出さない */
+  iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0;color-scheme:light;
+         opacity:0;transition:opacity var(--dur-2) var(--ease-out)}
+  iframe.loaded{opacity:1}
   .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:24px}
 
   /* モーダル (ヘッダ / スクロールする本文 / 固定フッタ の3段。余分な余白を作らない) */
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:20;backdrop-filter:blur(2px);padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left))}
-  .overlay.show{display:flex}
+  /* display 切替だと transition が効かないので opacity/visibility で出し入れする。
+     visibility を必ずセットにすること。opacity:0 だけだと非表示のはずのオーバーレイが
+     画面全体のクリックを奪ってしまう。
+     padding は素の 16px を先に置き、safe-area 込みの値で上書きする (env() 非対応向け) */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:20;backdrop-filter:blur(2px);
+           padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+           opacity:0;visibility:hidden;
+           transition:opacity var(--dur-2) var(--ease-in),visibility 0s linear var(--dur-2)}
+  .overlay.show{opacity:1;visibility:visible;
+                transition:opacity var(--dur-2) var(--ease-out),visibility 0s}
+  .overlay .modal{transform:translateY(8px) scale(.98);
+                  transition:transform var(--dur-2) var(--ease-in)}
+  .overlay.show .modal{transform:none;transition:transform var(--dur-2) var(--ease-out)}
   .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);width:min(640px,100%);max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow:hidden}
   .modal h2{margin:0;font-size:16px;font-weight:600;padding:15px 18px;border-bottom:1px solid var(--line)}
   .modal-body{padding:16px 18px;overflow:auto;flex:1 1 auto}
@@ -172,6 +215,15 @@
   .login h1{font-size:20px;margin:0 0 4px}
   .login p{margin:0 0 18px}
   .err{color:var(--danger);font-size:13px;min-height:18px;margin-top:8px}
+
+  /* 操作結果の通知レイヤー。alert() と違ってフローを止めない */
+  .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,12px);
+         background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+         padding:10px 16px;font-size:13px;z-index:40;opacity:0;visibility:hidden;pointer-events:none;
+         transition:opacity var(--dur-2) var(--ease-in),transform var(--dur-2) var(--ease-in),visibility 0s linear var(--dur-2)}
+  .toast.show{opacity:1;visibility:visible;transform:translate(-50%,0);
+              transition:opacity var(--dur-2) var(--ease-out),transform var(--dur-2) var(--ease-out),visibility 0s}
+  .toast.err{border-color:#5a2b30;color:var(--danger)}
 
   .hide{display:none!important}
   body.modal-open{overflow:hidden}
@@ -287,6 +339,9 @@
   </div>
 </div>
 
+<!-- 操作結果の通知 (成功も失敗も。role=status で読み上げにも乗せる) -->
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
 <script>
 'use strict';
 // このマーカー行は Worker が DEMO_MODE のとき true に書き換えて配信する。編集しないこと。
@@ -305,6 +360,15 @@ let restored = false; // 起動時の「最後のページ」自動復元を1回
 // ---- localStorage helpers ----
 function lsGet(k){ try{ return localStorage.getItem(k); }catch{ return null; } }
 function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch{} }
+
+// ---- トースト (操作結果の通知) ----
+// alert() と違ってフローを止めないので、成功時の通知にも使える。
+let toastTimer = null;
+function toast(msg, isErr){
+  const el = $('toast'); el.textContent = msg;
+  el.classList.toggle('err', !!isErr); el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>el.classList.remove('show'), 2600);
+}
 
 // ---- i18n (ランタイム切替。ビルド不要) --------------------------------------
 const I18N = {
@@ -349,6 +413,9 @@ const I18N = {
     demoText: 'Read-only demo',
     demoLink: 'Deploy your own vault',
     langToggle: '日本語',
+    toastSaved: 'Saved',
+    toastDeleted: 'Deleted',
+    toastOrderFailed: 'Could not save the new order',
   },
   ja: {
     docTitle: 'HTML Vault — セルフホストHTMLスニペット保管庫',
@@ -391,6 +458,9 @@ const I18N = {
     demoText: '閲覧専用デモ',
     demoLink: '自分の Vault をデプロイ',
     langToggle: 'EN',
+    toastSaved: '保存しました',
+    toastDeleted: '削除しました',
+    toastOrderFailed: '並べ替えを保存できませんでした',
   },
 };
 // 初期言語: localStorage("hv_lang") → navigator.language が ja 始まりなら ja → それ以外は en
@@ -477,7 +547,7 @@ window.addEventListener('message', (e)=>{
     const hit = SNIPPETS.filter(s=>(s.title||'').trim().toLowerCase()===base)
       .sort((a,b)=>b.updated-a.updated)[0];
     if(hit) openSnippet(hit.id);
-    else alert(t('linkNotFound', { name: d.nav }));
+    else toast(t('linkNotFound', { name: d.nav }), true);
   }
 });
 
@@ -611,7 +681,9 @@ function openSnippet(id){
   }
 }
 function showPreview(){
-  const f = $('frame'); f.classList.remove('hide');
+  // 読み込み完了まで透明にしておき、load 後に .loaded でフェードインさせる。
+  const f = $('frame'); f.classList.remove('hide','loaded');
+  f.onload = ()=> f.classList.add('loaded');
   // プレビューは sandbox iframe。srcに同一オリジンのpreviewエンドポイントを指定。
   f.src = '/api/snippets/'+currentId+'/preview';
 }
@@ -631,6 +703,7 @@ function openModal(edit){
   }
   $('modal').classList.add('show');
   document.body.classList.add('modal-open');
+  $('mTitle').focus(); // 開いた直後の入力先を明示する
 }
 function closeModal(){ $('modal').classList.remove('show'); document.body.classList.remove('modal-open'); }
 
@@ -675,10 +748,13 @@ async function save(){
     closeModal();
     await loadList();
     if(editingId && currentId) showPreview();
-    if(skipped>0) alert(t('addedSkipped', { a: added, n: skipped }));
+    // スキップがあればその内訳を、無ければ単に保存完了を伝える
+    if(skipped>0) toast(t('addedSkipped', { a: added, n: skipped }));
+    else toast(t('toastSaved'));
   }catch(e){ $('modalErr').textContent = e.message; }
 }
 
+// 削除は破壊操作なので confirm() は残す (トーストは結果の通知だけ担う)
 async function delById(id, title){
   if(!confirm(t('confirmDelete', { title: title || t('untitled') }))) return;
   try{
@@ -688,6 +764,7 @@ async function delById(id, title){
     if(currentId===id){
       currentId=null;
       $('tabs').style.display='none';
+      $('frame').classList.remove('loaded');
       $('frame').classList.add('hide'); $('frame').src='about:blank';
       $('emptyState').classList.remove('hide');
       // モバイルでは一覧に戻す
@@ -695,7 +772,8 @@ async function delById(id, title){
       $('sidebar').classList.remove('collapsed');
     }
     await loadList();
-  }catch(e){ alert(e.message); }
+    toast(t('toastDeleted'));
+  }catch(e){ toast(e.message, true); }
 }
 
 // ---- ドラッグ&ドロップ並べ替え ----
@@ -750,8 +828,8 @@ async function persistOrder(){
   SNIPPETS.sort((a,b)=>(pos.get(a.id)??0)-(pos.get(b.id)??0));
   try{
     await api('PUT','/api/snippets/order', { ids });
-  }catch(e){
-    alert(e.message);
+  }catch{
+    toast(t('toastOrderFailed'), true);
     await loadList(); // 保存に失敗したらサーバー側の並びに戻す
   }
 }
@@ -762,7 +840,7 @@ async function togglePin(id, pinned){
     await api('PUT','/api/snippets/'+id, { pinned });
     await loadList();
     if(SEARCH_RESULTS !== null) await runSearch(); // 検索表示中は結果側も更新する
-  }catch(e){ alert(e.message); }
+  }catch(e){ toast(e.message, true); }
 }
 
 // ---- エクスポート (スニペットを1ファイルずつHTMLでダウンロード) ----
@@ -807,6 +885,7 @@ function handleKey(e){
   if(e.isComposing) return; // IME変換中の Enter/Escape は握らない
   if(e.key === 'Escape'){
     if(!$('accountMenu').classList.contains('hide')){ setMenu(false); $('menuBtn').focus(); return; }
+    // モーダルの可視状態は .overlay.show で表現されている (#modal に .hide は付かない)
     if($('modal').classList.contains('show')){ closeModal(); return; }
     return;
   }
@@ -889,6 +968,8 @@ $('newBtn').onclick = ()=>openModal(false);
 $('editBtn').onclick = ()=>openModal(true);
 $('mCancel').onclick = closeModal;
 $('mSave').onclick = save;
+// オーバーレイの余白 (モーダル本体の外) をクリックしたら閉じる
+$('modal').addEventListener('mousedown', e=>{ if(e.target === $('modal')) closeModal(); });
 $('backBtn').onclick = ()=>{
   $('content').classList.add('hidden-mobile');
   $('sidebar').classList.remove('collapsed');

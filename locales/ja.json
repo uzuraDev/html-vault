@@ -33,7 +33,10 @@
     "expandMenu": "メニューを開く",
     "noSnippets": "スニペットがありません",
     "confirmDelete": "「{title}」を削除しますか？\nこの操作は元に戻せません。",
-    "errorPrefix": "エラー"
+    "errorPrefix": "エラー",
+    "toastSaved": "保存しました",
+    "toastDeleted": "削除しました",
+    "toastOrderFailed": "並べ替えを保存できませんでした"
   },
   "server": {
     "noPassword": "パスワード未設定です。setpass を実行してください。",

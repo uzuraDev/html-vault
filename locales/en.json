@@ -33,7 +33,10 @@
     "expandMenu": "Open menu",
     "noSnippets": "No snippets",
     "confirmDelete": "Delete \"{title}\"?\nThis cannot be undone.",
-    "errorPrefix": "Error"
+    "errorPrefix": "Error",
+    "toastSaved": "Saved",
+    "toastDeleted": "Deleted",
+    "toastOrderFailed": "Could not save the new order"
   },
   "server": {
     "noPassword": "Password is not set. Run setpass first.",
