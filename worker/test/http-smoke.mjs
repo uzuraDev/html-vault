@@ -285,17 +285,8 @@ async function phaseNormal() {
     check('unauth: POST /api/logout -> 401', r.status, 401);
   }
 
-  // --- logout without csrf -> 403, with csrf -> 200 ---
-  {
-    const r = await req('/api/logout', { method: 'POST', headers: authH });
-    check('logout: authed without csrf -> 403', r.status, 403);
-  }
-  {
-    const r = await req('/api/logout', { method: 'POST', headers: authCsrf });
-    check('logout: authed with csrf -> 200', r.status, 200);
-  }
-  // NOTE: sessions are stateless HMAC cookies; logout only clears the client
-  // cookie, so shared.cookie remains valid for the rest of this phase.
+  // NOTE: logout now revokes the session server-side, so the logout assertions
+  // live at the very end of this phase — everything below still needs authH.
 
   // --- security headers across representative responses ---
   checkSecHeaders('GET / (index)', await req('/'));
@@ -467,6 +458,40 @@ async function phaseNormal() {
       body: JSON.stringify({ ids: [] }),
     });
     check('order: without csrf -> 403', r.status, 403);
+  }
+
+  // --- logout: must revoke server-side, not just clear the client cookie ---
+  // Kept last in this phase because it kills the session every assertion above uses.
+  {
+    const r = await req('/api/logout', { method: 'POST', headers: authH });
+    check('logout: authed without csrf -> 403', r.status, 403);
+  }
+  {
+    const r = await req('/api/logout', { method: 'POST', headers: authCsrf });
+    check('logout: authed with csrf -> 200', r.status, 200);
+  }
+  {
+    // The signed cookie is still intact and unexpired; only the server-side
+    // revocation list can stop it. Replaying it must fail.
+    const r = await req('/api/snippets', { headers: authH });
+    check('logout: replaying the logged-out cookie -> 401', r.status, 401);
+  }
+  {
+    const r = await req('/api/me', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'logout: /api/me with the logged-out cookie -> authed:false',
+      r.status === 200 && b.authed === false && b.csrf === null,
+      '200 authed=false csrf=null',
+      `status=${r.status} authed=${b.authed} csrf=${b.csrf}`
+    );
+  }
+  {
+    // A write path too. Uses a well-formed but non-existent id so a regression
+    // here fails loudly (401 expected) instead of deleting a snippet the later
+    // phases rely on.
+    const r = await req(`/api/snippets/${'a'.repeat(32)}`, { method: 'DELETE', headers: authCsrf });
+    check('logout: write with the logged-out cookie -> 401', r.status, 401);
   }
 }
 

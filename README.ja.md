@@ -99,11 +99,12 @@ curl -s -X POST https://<あなたのWorker>.<あなたのサブドメイン>.wo
 | 他人のアクセス | ログイン必須・ログインレート制限（15分10回） |
 | CSRF | 変更系APIにダブルサブミットトークン |
 | パストラバーサル | サーバー採番・16進32文字のみ |
+| セッショントークンの漏えい | ログアウトでサーバー側から失効。パスワードを変えれば既存セッションは全て無効 |
 
 実装ごとの違い：
 
-- **Docker 版**: bcrypt によるパスワードハッシュ、helmet によるセキュリティヘッダ、サーバー側セッション + HttpOnly / `SameSite=Strict` /（HTTPS時）Secure Cookie
-- **Workers 版**: PBKDF2-SHA256 によるパスワードハッシュ、手書きのセキュリティヘッダ、ステートレスな HMAC 署名 Cookie（HttpOnly / `SameSite=Lax` / Secure）+ timing-safe 比較
+- **Docker 版**: bcrypt によるパスワードハッシュ、helmet によるセキュリティヘッダ、サーバー側セッション + HttpOnly / `SameSite=Strict` /（HTTPS時）Secure Cookie。ログアウトで `data/sessions.json` から実体を削除。各セッションはパスワードハッシュの指紋を持つので、`setpass.js` を実行すると全セッションがログアウトされる
+- **Workers 版**: PBKDF2-SHA256 によるパスワードハッシュ、手書きのセキュリティヘッダ、HMAC 署名 Cookie（HttpOnly / `SameSite=Lax` / Secure）+ timing-safe 比較。Cookie に `AUTH_HASH` の指紋を持つので、`npm run setpass` で Secret を差し替えれば全セッションが即座に無効になる。ログアウトはセッションを KV の失効リストに載せる（KV は結果整合のため、他のエッジでは失効の反映に最大 60 秒程度かかりうる）
 
 セルフホストで公開する場合は HTTPS と固定 `SESSION_SECRET` を。必要なら前段に Basic 認証 / Cloudflare Access を追加。
 

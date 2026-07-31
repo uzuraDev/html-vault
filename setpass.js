@@ -64,5 +64,8 @@ function questionHidden(query) {
   const hash = bcrypt.hashSync(p1, 12);
   fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash }, null, 2));
   console.log('✓ パスワードを設定しました (data/auth.json)。');
+  // サーバーはセッションにパスワードハッシュの指紋を持たせている。
+  // ハッシュが変わった時点で既存セッションは認証ガードで弾かれる (再起動不要)。
+  console.log('  既存のログインセッションは全て無効になりました。ログインし直してください。');
   process.exit(0);
 })();
