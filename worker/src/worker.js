@@ -801,7 +801,10 @@ export default {
       if (path.startsWith('/p/') && method === 'GET') {
         const htmlErr = (msg, status) =>
           new Response(
-            '<!doctype html><html lang="en"><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#333">' +
+            // viewport が無いと iOS Safari は既定の980pxレイアウトで描画し、縮小表示になる
+            '<!doctype html><html lang="en"><meta charset="utf-8">' +
+              '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+              '<body style="font-family:sans-serif;padding:40px;color:#333">' +
               // msg はデコード済みスラッグ等のユーザー入力を含み得るので必ずエスケープする
               '<p>' + escapeHtml(msg) + '</p><p><a href="/">Open HTML Vault</a></p></body></html>',
             { status, headers: { 'Content-Type': 'text/html; charset=utf-8', ...SEC_HEADERS } }
