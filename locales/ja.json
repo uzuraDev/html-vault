@@ -49,6 +49,7 @@
     "unauthorized": "未認証です。",
     "emptyContent": "内容が空です。",
     "tooLarge": "{mb}MB を超えています。",
+    "bodyTooLarge": "リクエスト本文が大きすぎます。",
     "notFound": "見つかりません。",
     "invalidId": "不正なIDです。",
     "importInvalid": "インポートファイルが不正です。",

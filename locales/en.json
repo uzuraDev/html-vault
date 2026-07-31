@@ -49,6 +49,7 @@
     "unauthorized": "Not authenticated.",
     "emptyContent": "Content is empty.",
     "tooLarge": "Exceeds {mb} MB.",
+    "bodyTooLarge": "Request body is too large.",
     "notFound": "Not found.",
     "invalidId": "Invalid ID.",
     "importInvalid": "Invalid import file.",

@@ -291,6 +291,18 @@ async function phaseNormal() {
     check('unauth: POST /api/snippets -> 401', r.status, 401);
   }
   {
+    // 未認証で叩ける /api/login はパスワードしか運ばない。アプリ側の上限 (64KB) が
+    // 効いていれば、bcrypt 比較にもレート制限カウンタにも到達せず 413 で終わる。
+    // 上限が外れると 401 (パスワード不一致) になるのでこのケースが落ちる。
+    const r = await req('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'a'.repeat(128 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: unauth POST /api/login 128KB -> 413', r.status, 413);
+  }
+  {
     const r = await req('/api/me');
     const b = await r.json().catch(() => ({}));
     record(
@@ -678,6 +690,45 @@ async function phaseNormal() {
     if (b.snippet && b.snippet.id) {
       await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
     }
+  }
+
+  // --- 本文サイズ上限 (スニペット経路は大きい上限、ただし無制限ではない) ---
+  {
+    // 64KB を超えても、スニペットを運ぶ経路なら通ること
+    // (認証経路と同じ小さい上限を全体に当ててしまう実装を弾く)。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'BigButAllowed', html: '<p>' + 'b'.repeat(256 * 1024) + '</p>' }),
+    });
+    const b = await r.json().catch(() => ({}));
+    check('body-limit: 256KB のスニペット作成は通る', r.status, 200);
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
+    // MAX_UPLOAD_MB (10MB) + 余裕分を超える本文は 413。Content-Length を見て
+    // パースの前に弾くので、ハンドラまで届かない。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'TooBigToStore', html: 'x'.repeat(11 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 11MB のスニペット作成 -> 413', r.status, 413);
+  }
+  {
+    // 413 で弾かれた作成が保存されていないことの裏取り。
+    const r = await req('/api/snippets', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    const titles = (b.snippets || []).map((s) => s.title);
+    record(
+      'body-limit: 413 になった作成が一覧に残っていない',
+      !titles.includes('TooBigToStore') && !titles.includes('BigButAllowed'),
+      'TooBigToStore も BigButAllowed も含まない',
+      titles.join(',') || '(空)'
+    );
   }
 
   // --- 静的UI ---
