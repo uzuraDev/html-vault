@@ -172,8 +172,18 @@ async function restart(base, extras, configFile) {
 // wrangler.toml ships with the SESSION_REVOCATIONS binding commented out (KV is
 // the default). To exercise the DO path we generate a sibling config with the
 // binding switched on, run one phase against it, and delete it afterwards.
+// The file has to live next to wrangler.toml — wrangler resolves `main` and the
+// text-module globs relative to the config's own directory, so a temp dir will not
+// do. That means it can collide with a file the developer already keeps there, so
+// it is backed up and restored exactly like .dev.vars is.
 const DO_CONFIG = path.join(WORKER_DIR, 'wrangler.do-test.toml');
+let ORIGINAL_DO_CONFIG = null; // string = existed with this content, null = did not exist
 function writeDoConfig() {
+  try {
+    ORIGINAL_DO_CONFIG = fs.readFileSync(DO_CONFIG, 'utf8');
+  } catch {
+    ORIGINAL_DO_CONFIG = null;
+  }
   const base = fs.readFileSync(path.join(WORKER_DIR, 'wrangler.toml'), 'utf8');
   const extra = [
     '',
@@ -189,6 +199,11 @@ function writeDoConfig() {
   fs.writeFileSync(DO_CONFIG, base + extra);
 }
 function removeDoConfig() {
+  if (ORIGINAL_DO_CONFIG != null) {
+    // Put the developer's own file back rather than deleting it.
+    try { fs.writeFileSync(DO_CONFIG, ORIGINAL_DO_CONFIG); } catch { /* ignore */ }
+    return;
+  }
   try { fs.unlinkSync(DO_CONFIG); } catch { /* already gone */ }
 }
 
