@@ -18,6 +18,26 @@ kv_namespaces = [
   { binding = "VAULT", id = "REPLACE_AFTER_KV_CREATE" }
 ]
 
+# Optional: strongly consistent session revocation.
+#
+# By default, logout records the revoked session in KV. KV is eventually
+# consistent (60s read cache), so a stolen cookie can still be replayed at
+# another edge location for up to about a minute after you log out.
+#
+# Uncomment both blocks below to keep the revocation list in a Durable Object
+# instead. A DO serializes reads and writes through one instance, so logout
+# takes effect everywhere immediately. The cost is one extra round trip to the
+# DO on every authenticated request. The code picks the DO automatically when
+# the binding exists — nothing else to change.
+#
+# [[durable_objects.bindings]]
+# name = "SESSION_REVOCATIONS"
+# class_name = "SessionRevocations"
+#
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["SessionRevocations"]
+
 # Plain (non-secret) vars. Set DEMO_MODE = "1" to run a read-only public demo.
 # WARNING: DEMO_MODE makes every snippet in the bound KV namespace publicly
 # readable without login. Only enable it with a dedicated demo namespace

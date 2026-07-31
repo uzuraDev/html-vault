@@ -104,7 +104,7 @@ curl -s -X POST https://<あなたのWorker>.<あなたのサブドメイン>.wo
 実装ごとの違い：
 
 - **Docker 版**: bcrypt によるパスワードハッシュ、helmet によるセキュリティヘッダ、サーバー側セッション + HttpOnly / `SameSite=Strict` /（HTTPS時）Secure Cookie。ログアウトで `data/sessions.json` から実体を削除。各セッションはパスワードハッシュの指紋を持つので、`setpass.js` を実行すると全セッションがログアウトされる
-- **Workers 版**: PBKDF2-SHA256 によるパスワードハッシュ、手書きのセキュリティヘッダ、HMAC 署名 Cookie（HttpOnly / `SameSite=Lax` / Secure）+ timing-safe 比較。Cookie に `AUTH_HASH` の指紋を持つので、`npm run setpass` で Secret を差し替えれば全セッションが即座に無効になる。ログアウトはセッションを KV の失効リストに載せる（KV は結果整合のため、他のエッジでは失効の反映に最大 60 秒程度かかりうる）。この書き込みに失敗した場合、ログアウトは `200` ではなく `500` を返す（ブラウザの Cookie はどちらでも消すが、`200` は「そのトークンはもう通らない」という約束なので、失効が載っていないのに返さない）。失効リストの読みは fail-closed で、KV が引けない間はセッションを有効扱いせず弾く
+- **Workers 版**: PBKDF2-SHA256 によるパスワードハッシュ、手書きのセキュリティヘッダ、HMAC 署名 Cookie（HttpOnly / `SameSite=Lax` / Secure）+ timing-safe 比較。Cookie に `AUTH_HASH` の指紋を持つので、`npm run setpass` で Secret を差し替えれば全セッションが即座に無効になる。ログアウトはセッションを KV の失効リストに載せる（KV は結果整合のため、他のエッジでは失効の反映に最大 60 秒程度かかりうる）。この書き込みに失敗した場合、ログアウトは `200` ではなく `500` を返す（ブラウザの Cookie はどちらでも消すが、`200` は「そのトークンはもう通らない」という約束なので、失効が載っていないのに返さない）。失効リストの読みは fail-closed で、KV が引けない間はセッションを有効扱いせず弾く。この最大60秒の窓が許容できない場合は、任意の `SESSION_REVOCATIONS` Durable Object をバインドすると失効リストが強整合な保存先に移り、ログアウトが全エッジで即座に効く（設定は [`worker/wrangler.toml`](worker/wrangler.toml) のコメント参照。認証つきリクエストごとに DO への往復が1回増える）
 
 セルフホストで公開する場合は HTTPS と固定 `SESSION_SECRET` を。必要なら前段に Basic 認証 / Cloudflare Access を追加。
 

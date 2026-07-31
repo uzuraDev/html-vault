@@ -131,7 +131,7 @@ function killWrangler() {
   }
   child = null;
 }
-async function startWrangler() {
+async function startWrangler(configFile) {
   const args = [
     'wrangler', 'dev',
     '--port', String(PORT),
@@ -139,6 +139,8 @@ async function startWrangler() {
     '--ip', '127.0.0.1',
     '--persist-to', PERSIST_DIR,
   ];
+  // The Durable Object phase needs a config with the optional binding enabled.
+  if (configFile) args.push('--config', configFile);
   const cmd = 'npx';
   child = spawn(cmd, args, {
     cwd: WORKER_DIR,
@@ -159,11 +161,35 @@ async function startWrangler() {
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-async function restart(base, extras) {
+async function restart(base, extras, configFile) {
   killWrangler();
   await sleep(1500); // let the port release
   writeVars(base, extras);
-  await startWrangler();
+  await startWrangler(configFile);
+}
+
+// ---- optional Durable Object config --------------------------------------
+// wrangler.toml ships with the SESSION_REVOCATIONS binding commented out (KV is
+// the default). To exercise the DO path we generate a sibling config with the
+// binding switched on, run one phase against it, and delete it afterwards.
+const DO_CONFIG = path.join(WORKER_DIR, 'wrangler.do-test.toml');
+function writeDoConfig() {
+  const base = fs.readFileSync(path.join(WORKER_DIR, 'wrangler.toml'), 'utf8');
+  const extra = [
+    '',
+    '[[durable_objects.bindings]]',
+    'name = "SESSION_REVOCATIONS"',
+    'class_name = "SessionRevocations"',
+    '',
+    '[[migrations]]',
+    'tag = "v1"',
+    'new_sqlite_classes = ["SessionRevocations"]',
+    '',
+  ].join('\n');
+  fs.writeFileSync(DO_CONFIG, base + extra);
+}
+function removeDoConfig() {
+  try { fs.unlinkSync(DO_CONFIG); } catch { /* already gone */ }
 }
 
 // ---- fetch helper ---------------------------------------------------------
@@ -709,6 +735,82 @@ async function phaseDemo() {
 }
 
 // ===========================================================================
+//  PHASE 4: DURABLE OBJECT REVOCATION (optional binding)
+// ===========================================================================
+// Same guarantees as the KV path, but backed by a Durable Object. Locally both
+// are strongly consistent, so this phase cannot prove the multi-PoP difference
+// (that needs a real deployment). What it does prove: the binding, the class
+// and the migration are wired correctly, wrangler dev boots with them, and
+// logout still revokes the session when the DO path is the one being used.
+async function phaseDurableObject() {
+  console.log('\n=== PHASE: durable-object ===');
+
+  record(
+    'do: generated config carries the SESSION_REVOCATIONS binding',
+    fs.readFileSync(DO_CONFIG, 'utf8').includes('name = "SESSION_REVOCATIONS"'),
+    'binding present in wrangler.do-test.toml',
+    'missing'
+  );
+
+  const loginRes = await req('/api/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: PASSWORD }),
+  });
+  const loginBody = await loginRes.json().catch(() => ({}));
+  const cookie = extractSessCookie(loginRes);
+  const csrf = loginBody.csrf;
+  record(
+    'do: login -> 200 + cookie + csrf',
+    loginRes.status === 200 && !!cookie && !!csrf,
+    '200 with hv_sess cookie and csrf',
+    `status=${loginRes.status} cookie=${!!cookie} csrf=${!!csrf}`
+  );
+  const authH = { Cookie: `hv_sess=${cookie}` };
+  const authCsrf = { Cookie: `hv_sess=${cookie}`, 'x-csrf-token': csrf };
+
+  {
+    const r = await req('/api/snippets', { headers: authH });
+    check('do: the session works before logout -> 200', r.status, 200);
+  }
+  {
+    const r = await req('/api/logout', { method: 'POST', headers: authCsrf });
+    check('do: logout -> 200 (the DO write succeeded)', r.status, 200);
+  }
+  {
+    // The signed cookie is untouched and unexpired. Only the DO revocation list
+    // can stop it.
+    const r = await req('/api/snippets', { headers: authH });
+    check('do: replaying the logged-out cookie -> 401', r.status, 401);
+  }
+  {
+    const r = await req('/api/me', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'do: /api/me with the logged-out cookie -> authed:false',
+      r.status === 200 && b.authed === false && b.csrf === null,
+      '200 authed=false csrf=null',
+      `status=${r.status} authed=${b.authed} csrf=${b.csrf}`
+    );
+  }
+  {
+    const r = await req(`/api/snippets/${'a'.repeat(32)}`, { method: 'DELETE', headers: authCsrf });
+    check('do: write with the logged-out cookie -> 401', r.status, 401);
+  }
+  {
+    // A fresh login must not inherit the previous session's revocation.
+    const r2 = await req('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    const c2 = extractSessCookie(r2);
+    const r3 = await req('/api/snippets', { headers: { Cookie: `hv_sess=${c2}` } });
+    check('do: logging in again works after a revocation -> 200', r3.status, 200);
+  }
+}
+
+// ===========================================================================
 //  PHASE 3: MCP UNSET
 // ===========================================================================
 async function phaseMcpUnset() {
@@ -740,9 +842,15 @@ async function main() {
 
     await restart(base, []); // MCP secret removed
     await phaseMcpUnset();
+
+    // Optional Durable Object revocation backend.
+    writeDoConfig();
+    await restart(base, [`MCP_SECRET_PATH=${MCP_SECRET}`], DO_CONFIG);
+    await phaseDurableObject();
   } finally {
     killWrangler();
     restoreVars();
+    removeDoConfig();
   }
 
   const passed = results.filter((r) => r.pass).length;
@@ -773,6 +881,7 @@ function cleanupOnSignal(signal) {
   cleanedUp = true;
   try { killWrangler(); } catch { /* ignore */ }
   try { restoreVars(); } catch { /* ignore */ }
+  try { removeDoConfig(); } catch { /* ignore */ }
   console.log(`\nInterrupted by ${signal}; .dev.vars restored.`);
   process.exit(130);
 }
@@ -784,5 +893,6 @@ main().catch((e) => {
   console.error('HARNESS ERROR:', e && e.stack || e);
   try { killWrangler(); } catch { /* ignore */ }
   try { restoreVars(); } catch { /* ignore */ }
+  try { removeDoConfig(); } catch { /* ignore */ }
   process.exit(2);
 });

@@ -116,30 +116,122 @@ async function authVersion(env) {
 // ---- セッション失効リスト (ログアウトをサーバー側で効かせる) ----
 // セッションはステートレスな署名Cookieなので、Cookie を消すだけでは
 // 盗まれた/複製されたトークンが有効期限まで通ってしまう。ログアウト時に
-// nonce を KV の失効リストへ載せ、認証のたびに引く。
-// 注意: KV は結果整合 (既定の読みキャッシュ 60 秒) なので、別 PoP へ失効が
-// 行き渡るまで最大 1 分程度かかりうる。厳密な即時失効が要るなら Durable Object
-// を使うこと。ログイン試行カウンタ (rl:) と同じ割り切り。
+// nonce を失効リストへ載せ、認証のたびに引く。
+//
+// 保存先は2通りあり、バインディングの有無で自動的に切り替わる:
+//
+//   SESSION_REVOCATIONS (Durable Object) がある → 強整合。ログアウトは全エッジで即座に効く。
+//   無い (既定)                                → KV。結果整合なので、別 PoP へ失効が
+//                                               行き渡るまで最大 1 分程度かかりうる。
+//
+// DO を使うと認証つきリクエストごとに DO への往復が1回増える。個人用途では
+// KV のままで足りることが多いので、既定は KV・要る人だけ DO、という形にしている。
+// 設定方法は worker/wrangler.toml のコメントを参照。
 function revKey(nonce) { return 'rev:' + nonce; }
-// 失効リストの読みは fail-closed にする。KV が引けないときに false を返すと
+
+// DO のスタブ。バインドされていなければ null (= KV 経路)。
+// 単一インスタンスに集約する (失効リストは小さく、順序も要らない)。
+// バインドはされているのにスタブが取れない場合は null を返さず投げる。
+// 黙って KV へ落ちると、運用者が選んだ「強整合」がいつのまにか結果整合に
+// すり替わるため。呼び出し側はこれを失敗として扱う (fail-closed)。
+function revocationStub(env) {
+  if (!env.SESSION_REVOCATIONS) return null;
+  return env.SESSION_REVOCATIONS.get(env.SESSION_REVOCATIONS.idFromName('global'));
+}
+
+// 失効リストの読みは fail-closed にする。引けないときに false を返すと
 // 「失効済みの Cookie が有効扱いされる」= ログアウトが効かなくなる方向に倒れる。
-// 逆に倒すと KV 障害中は全員ログアウトになるが、失効を守るほうを取る。
+// 逆に倒すと障害中は全員ログアウトになるが、失効を守るほうを取る。
 async function isRevoked(env, nonce) {
-  if (!env.VAULT || !nonce) return false;
+  if (!nonce) return false;
+  if (env.SESSION_REVOCATIONS) {
+    try {
+      const r = await revocationStub(env).fetch('https://do/check?n=' + encodeURIComponent(nonce));
+      if (!r.ok) return true;
+      return (await r.text()) === '1';
+    } catch {
+      return true;
+    }
+  }
+  if (!env.VAULT) return false;
   try { return (await env.VAULT.get(revKey(nonce))) !== null; } catch { return true; }
 }
 // 書き込めたときだけ true。呼び出し側は失敗を成功として返してはいけない
 // (200 を返した時点で「このセッションはもう通らない」と約束することになる)。
 async function revokeSession(env, sess) {
-  if (!env.VAULT || !sess || !sess.n) return false;
+  if (!sess || !sess.n) return false;
   // 残りの有効期間だけ覚えておけば十分 (KV の expirationTtl は最低 60 秒)。
   const remainSec = Math.ceil((Number(sess.exp) - Date.now()) / 1000);
   const ttl = Math.max(60, Number.isFinite(remainSec) ? remainSec : 60);
+  if (env.SESSION_REVOCATIONS) {
+    try {
+      const r = await revocationStub(env).fetch(
+        'https://do/revoke?n=' + encodeURIComponent(sess.n) + '&ttl=' + ttl,
+        { method: 'POST' }
+      );
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+  if (!env.VAULT) return false;
   try {
     await env.VAULT.put(revKey(sess.n), '1', { expirationTtl: ttl });
     return true;
   } catch {
     return false;
+  }
+}
+
+// ---- Durable Object: セッション失効リスト (任意) ----
+// wrangler.toml で SESSION_REVOCATIONS をバインドしたときだけ使われる。
+// DO は単一インスタンスへ直列化されるため、書き込みが読みに即座に反映される
+// (KV のような伝播待ちが無い) = ログアウトが全エッジで即座に効く。
+//
+// 保持するのは「失効した nonce → 失効が意味を持つ期限(ms)」だけ。セッションの
+// 有効期限を過ぎた nonce は保持しても意味がないので、期限切れは読み書きの
+// ついでに掃除する (エントリ数はログアウト回数ぶんしか増えない)。
+export class SessionRevocations {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(req) {
+    const url = new URL(req.url);
+    const nonce = url.searchParams.get('n') || '';
+    if (!nonce) return new Response('bad request', { status: 400 });
+
+    if (url.pathname === '/revoke' && req.method === 'POST') {
+      const ttl = Number(url.searchParams.get('ttl'));
+      const keepMs = Number.isFinite(ttl) && ttl > 0 ? ttl * 1000 : 60_000;
+      await this.state.storage.put(nonce, Date.now() + keepMs);
+      await this.prune();
+      return new Response('', { status: 204 });
+    }
+
+    if (url.pathname === '/check') {
+      const until = await this.state.storage.get(nonce);
+      if (typeof until !== 'number') return new Response('0');
+      if (until <= Date.now()) {
+        await this.state.storage.delete(nonce);
+        return new Response('0');
+      }
+      return new Response('1');
+    }
+
+    return new Response('not found', { status: 404 });
+  }
+
+  // 期限切れのエントリを落とす。失効リストは小さい (ログアウト回数ぶん) ので
+  // 全件走査で足りる。
+  async prune() {
+    const now = Date.now();
+    const all = await this.state.storage.list();
+    const dead = [];
+    for (const [key, until] of all) {
+      if (typeof until !== 'number' || until <= now) dead.push(key);
+    }
+    if (dead.length) await this.state.storage.delete(dead);
   }
 }
 
