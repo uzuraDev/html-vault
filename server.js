@@ -1000,7 +1000,10 @@ app.put('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
   if (typeof req.body.html === 'string') {
     const file = snippetPath(req.params.id);
     if (!file) return res.status(400).json({ error: STR.invalidId });
-    if (req.body.html.length > MAX_UPLOAD_BYTES) {
+    // 上限はバイト数で見る。String#length は UTF-16 のコード単位数なので、
+    // 日本語のようなマルチバイト文字だと実バイト数の 1/3 程度になり、上限を
+    // 大きく超える本文が通ってしまう (下の meta.bytes と基準がずれる)。
+    if (Buffer.byteLength(req.body.html, 'utf8') > MAX_UPLOAD_BYTES) {
       return res.status(413).json({ error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB) });
     }
     const contractError = htmlContractError(req.body.html);

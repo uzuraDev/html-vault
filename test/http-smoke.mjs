@@ -809,6 +809,67 @@ async function phaseNormal() {
     if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
   }
   {
+    // マルチバイト境界。String#length は UTF-16 のコード単位数なので、'あ' は
+    // 1文字=3バイト。length で上限判定していると、10MiB 制限のところへ 12MiB の
+    // 本文が通ってしまう (PR #55 で指摘された更新経路の穴)。作成・更新の両方を見る。
+    const KANA = 'あ';
+    const overText = KANA.repeat(4 * 1024 * 1024);  // 12,582,912 バイト / length 4,194,304
+    const underText = KANA.repeat(3 * 1024 * 1024); // 9,437,184 バイト / length 3,145,728
+
+    // 作成: バイト数で超えているので 413
+    {
+      const r = await req('/api/snippets', {
+        method: 'POST',
+        headers: jsonCsrf,
+        body: JSON.stringify({ title: 'MultibyteOverCreate', html: overText }),
+      });
+      await r.text();
+      check('multibyte: 12MiB 相当 (length は上限以下) の作成 -> 413', r.status, 413);
+    }
+
+    // 更新の土台を作る
+    const c = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'MultibyteTarget', html: '<p>ok</p>' }),
+    });
+    const cb = await c.json().catch(() => ({}));
+    const id = cb.snippet && cb.snippet.id;
+
+    // 更新: バイト数で超えているので 413
+    {
+      const r = await req('/api/snippets/' + id, {
+        method: 'PUT',
+        headers: jsonCsrf,
+        body: JSON.stringify({ html: overText }),
+      });
+      await r.text();
+      check('multibyte: 12MiB 相当 (length は上限以下) への更新 -> 413', r.status, 413);
+    }
+
+    // 更新: 上限以下なら通り、記録されるバイト数も UTF-8 の実バイト数であること
+    {
+      const r = await req('/api/snippets/' + id, {
+        method: 'PUT',
+        headers: jsonCsrf,
+        body: JSON.stringify({ title: 'MultibyteUnder', html: underText }),
+      });
+      await r.text();
+      check('multibyte: 9MiB 相当への更新 -> 200', r.status, 200);
+      const list = await req('/api/snippets', { headers: authH });
+      const lb = await list.json().catch(() => ({}));
+      const meta = (lb.snippets || []).find((x) => x.id === id);
+      record(
+        'multibyte: 記録されるバイト数が UTF-8 の実バイト数',
+        !!meta && meta.bytes === Buffer.byteLength(underText, 'utf8'),
+        String(Buffer.byteLength(underText, 'utf8')),
+        meta ? String(meta.bytes) : '(見つからない)'
+      );
+    }
+
+    if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
+  }
+  {
     // 413 で弾かれた作成が保存されていないことの裏取り。
     const r = await req('/api/snippets', { headers: authH });
     const b = await r.json().catch(() => ({}));
@@ -821,7 +882,10 @@ async function phaseNormal() {
         !titles.includes('QuoteHeavy') &&
         !titles.includes('CtrlChars') &&
         !titles.includes('NullHeavy') &&
-        !titles.includes('CtrlUpdateTarget'),
+        !titles.includes('CtrlUpdateTarget') &&
+        !titles.includes('MultibyteOverCreate') &&
+        !titles.includes('MultibyteTarget') &&
+        !titles.includes('MultibyteUnder'),
       '413 になった2件も、作成後に削除した2件も含まない',
       titles.join(',') || '(空)'
     );
