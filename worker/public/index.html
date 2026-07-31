@@ -81,6 +81,9 @@
   /* #menuBtn だけ隠すと .menu-wrap が空のフレックス項目として残り、
      .sidebar-head の gap:8px が1つ余分に効くので包み側もまとめて隠す */
   body.demo #newBtn,body.demo #menuBtn,body.demo .menu-wrap,body.demo .del-item,body.demo .pin-item,body.demo #editBtn{display:none!important}
+  /* UI_HIDE_NEW="1" のとき（MCP 中心運用向け）。要素は DOM に残し、表示だけ消す
+     （applyI18n が #newBtn を直接参照しているため、削除すると i18n 適用が丸ごと止まる） */
+  body.hide-new #newBtn{display:none!important}
 
   /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
   /* safe-area: viewport-fit=cover を宣言しているので、ノッチ/ホームインジケータ分を
@@ -346,9 +349,12 @@
 'use strict';
 // このマーカー行は Worker が DEMO_MODE のとき true に書き換えて配信する。編集しないこと。
 window.__HV_DEMO__ = false;
+// このマーカー行は Worker が UI_HIDE_NEW="1" のとき true に書き換えて配信する。編集しないこと。
+window.__HV_HIDE_NEW__ = false;
 
 const $ = (id) => document.getElementById(id);
 const DEMO = window.__HV_DEMO__ === true;
+const HIDE_NEW = window.__HV_HIDE_NEW__ === true;
 let CSRF = null;
 let SNIPPETS = [];
 let SEARCH_RESULTS = null; // 非nullなら全文検索結果を表示中
@@ -387,6 +393,7 @@ const I18N = {
     logout: 'Log out',
     backToList: '← List',
     emptyHint: 'Select an item from the list, or create a new one with ＋.',
+    emptyHintNoNew: 'Select an item from the list. (Press n to create one.)',
     modalNew: 'New snippet',
     modalEdit: 'Edit',
     fieldTitle: 'Title',
@@ -432,6 +439,7 @@ const I18N = {
     logout: 'ログアウト',
     backToList: '← 一覧',
     emptyHint: '左の一覧から選択するか、＋で新規作成してください。',
+    emptyHintNoNew: '左の一覧から選択してください。（新規作成は n キー）',
     modalNew: '新規スニペット',
     modalEdit: '編集',
     fieldTitle: 'タイトル',
@@ -495,7 +503,7 @@ function applyI18n(){
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
   $('editBtn').textContent = t('editBtn');
-  $('emptyState').textContent = t('emptyHint');
+  $('emptyState').textContent = t(HIDE_NEW ? 'emptyHintNoNew' : 'emptyHint');
   $('modalTitle').textContent = editingId ? t('modalEdit') : t('modalNew');
   $('mTitleLabel').textContent = t('fieldTitle');
   $('mTagsLabel').textContent = t('fieldTags');
@@ -882,16 +890,27 @@ $('accountMenu').addEventListener('focusout', (e)=>{
 // ---- キーボード操作 (document の keydown はこの1本だけ) ----
 // 上のレイヤーから順に処理して return する。ショートカットを足すときもこの構造を崩さない。
 function handleKey(e){
-  if(e.isComposing) return; // IME変換中の Enter/Escape は握らない
+  // IME 変換中のキーは拾わない (変換確定の Enter/Escape、および「ん」の入力途中など)。
+  if(e.isComposing || e.keyCode === 229) return;
   if(e.key === 'Escape'){
     if(!$('accountMenu').classList.contains('hide')){ setMenu(false); $('menuBtn').focus(); return; }
     // モーダルの可視状態は .overlay.show で表現されている (#modal に .hide は付かない)
     if($('modal').classList.contains('show')){ closeModal(); return; }
     return;
   }
+  // n: 新規作成。UI_HIDE_NEW="1" で＋を隠したときの代替導線を兼ねる。
+  if(DEMO) return; // 読み取り専用デモは書き込み系を全部塞ぐ
+  if(e.ctrlKey || e.metaKey || e.altKey) return;
+  if(e.key !== 'n') return;
+  if($('appView').classList.contains('hide')) return; // 未ログイン (ログイン画面) では効かせない
+  if(!$('accountMenu').classList.contains('hide')) return; // メニューを開いている間は効かせない
+  const el = e.target;
+  if(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  if($('modal').classList.contains('show')) return; // 多重に開かない
+  e.preventDefault();
+  openModal(false);
 }
 document.addEventListener('keydown', handleKey);
-
 // ---- サイドバーの折りたたみ/展開 (状態は localStorage に記憶) ----
 const LS_SB = 'hv:sbCollapsed';
 function setSidebarCollapsed(c){ $('appView').classList.toggle('sb-collapsed', c); lsSet(LS_SB, c ? '1' : ''); }
@@ -975,7 +994,13 @@ $('backBtn').onclick = ()=>{
   $('sidebar').classList.remove('collapsed');
 };
 
+// ---- キーボードショートカット ----
+// document への keydown リスナはこの1本だけにする。複数並べると Escape 一発で
+// 別々のUIが同時に閉じるなど、順序に依存した壊れ方をするため。
+
 // ---- 起動 ----
+// UI_HIDE_NEW: 空状態の文言を applyI18n() が分岐させるので、その前にクラスを付ける。
+if(HIDE_NEW) document.body.classList.add('hide-new');
 applyI18n();
 if(DEMO){
   // 読み取り専用デモ: ログインをスキップして一覧を公開表示。

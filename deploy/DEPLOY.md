@@ -16,6 +16,9 @@ cd /opt/html-vault
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
 
 # 2. deps + language (APP_LANG=ja for Japanese, default en)
+#    UI_HIDE_NEW=1 can be passed here too, to hide the ＋ (new snippet) button.
+#    Both are baked in at this step — systemd's Environment= never runs build:i18n,
+#    so re-run this command (and restart) whenever you change either value.
 sudo -u htmlvault npm ci --omit=dev
 sudo -u htmlvault APP_LANG=en npm run build:i18n
 

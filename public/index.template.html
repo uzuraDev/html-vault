@@ -107,6 +107,8 @@
   /* タップ領域 40px。幅の media query では囲わない (横向きのスマホも対象にする) */
   .toolbar input{height:40px}
   #newBtn{flex:none;width:40px;height:40px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
+  /* UI_HIDE_NEW=1 でビルドしたとき（MCP 中心運用向け）。要素は DOM に残し、表示だけ消す */
+  body.hide-new #newBtn{display:none!important}
   /* ログアウトをヘッダへ移して .sidebar-foot が無くなったぶん、一覧が画面下端まで
      伸びる。ホームインジケータに最後の行が隠れないよう safe-area を一覧側で受ける */
   .list{overflow:auto;flex:1;padding-bottom:env(safe-area-inset-bottom)}
@@ -236,7 +238,7 @@
   }
 </style>
 </head>
-<body>
+<body class="{{__BODY_CLASS__}}">
 
 <!-- ログイン画面 -->
 <div class="login" id="loginView">
@@ -630,16 +632,26 @@ $('accountMenu').addEventListener('focusout', (e)=>{
 // ---- キーボード操作 (document の keydown はこの1本だけ) ----
 // 上のレイヤーから順に処理して return する。ショートカットを足すときもこの構造を崩さない。
 function handleKey(e){
-  if(e.isComposing) return; // IME変換中の Enter/Escape は握らない
+  // IME 変換中のキーは拾わない (変換確定の Enter/Escape、および「ん」の入力途中など)。
+  if(e.isComposing || e.keyCode === 229) return;
   if(e.key === 'Escape'){
     if(!$('accountMenu').classList.contains('hide')){ setMenu(false); $('menuBtn').focus(); return; }
     // モーダルの可視状態は .overlay.show で表現されている (#modal に .hide は付かない)
     if($('modal').classList.contains('show')){ closeModal(); return; }
     return;
   }
+  // n: 新規作成。UI_HIDE_NEW=1 で＋を隠したときの代替導線を兼ねる。
+  if(e.ctrlKey || e.metaKey || e.altKey) return;
+  if(e.key !== 'n') return;
+  if($('appView').classList.contains('hide')) return; // 未ログイン (ログイン画面) では効かせない
+  if(!$('accountMenu').classList.contains('hide')) return; // メニューを開いている間は効かせない
+  const el = e.target;
+  if(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  if($('modal').classList.contains('show')) return; // 多重に開かない
+  e.preventDefault();
+  openModal(false);
 }
-document.addEventListener('keydown', handleKey);
-// 検索: q が空なら全件 (SNIPPETS) を表示。2文字以上ならサーバーで本文も含めて検索する。
+document.addEventListener('keydown', handleKey);// 検索: q が空なら全件 (SNIPPETS) を表示。2文字以上ならサーバーで本文も含めて検索する。
 // 入力のたびに走らせないよう ~200ms デバウンスする。
 let searchTimer = null;
 let searchAbort = null; // 進行中の検索リクエスト
@@ -689,6 +701,10 @@ $('backBtn').onclick = ()=>{
   $('content').classList.add('hidden-mobile');
   $('sidebar').classList.remove('collapsed');
 };
+
+// ---- キーボードショートカット ----
+// document への keydown リスナはこの1本だけにする。複数並べると Escape 一発で
+// 別々のUIが同時に閉じるなど、順序に依存した壊れ方をするため。
 
 // ---- サイドバーの折りたたみ/展開 (状態は localStorage に記憶。デスクトップ専用) ----
 const LS_SB = 'hv:sbCollapsed';

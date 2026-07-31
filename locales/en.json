@@ -16,6 +16,7 @@
     "newTitle": "New",
     "backToList": "← List",
     "emptyState": "Select an item on the left, or click ＋ to create one.",
+    "emptyStateNoNew": "Select an item on the left. (Press n to create one.)",
     "modalNewTitle": "New snippet",
     "modalEditTitle": "Edit",
     "fieldTitle": "Title",

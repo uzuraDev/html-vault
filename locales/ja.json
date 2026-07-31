@@ -16,6 +16,7 @@
     "newTitle": "新規",
     "backToList": "← 一覧",
     "emptyState": "左の一覧から選択するか、＋で新規作成してください。",
+    "emptyStateNoNew": "左の一覧から選択してください。（新規作成は n キー）",
     "modalNewTitle": "新規スニペット",
     "modalEditTitle": "編集",
     "fieldTitle": "タイトル",
