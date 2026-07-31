@@ -100,16 +100,26 @@ async function authVersion(env) {
 // 行き渡るまで最大 1 分程度かかりうる。厳密な即時失効が要るなら Durable Object
 // を使うこと。ログイン試行カウンタ (rl:) と同じ割り切り。
 function revKey(nonce) { return 'rev:' + nonce; }
+// 失効リストの読みは fail-closed にする。KV が引けないときに false を返すと
+// 「失効済みの Cookie が有効扱いされる」= ログアウトが効かなくなる方向に倒れる。
+// 逆に倒すと KV 障害中は全員ログアウトになるが、失効を守るほうを取る。
 async function isRevoked(env, nonce) {
   if (!env.VAULT || !nonce) return false;
-  try { return (await env.VAULT.get(revKey(nonce))) !== null; } catch { return false; }
+  try { return (await env.VAULT.get(revKey(nonce))) !== null; } catch { return true; }
 }
+// 書き込めたときだけ true。呼び出し側は失敗を成功として返してはいけない
+// (200 を返した時点で「このセッションはもう通らない」と約束することになる)。
 async function revokeSession(env, sess) {
-  if (!env.VAULT || !sess || !sess.n) return;
+  if (!env.VAULT || !sess || !sess.n) return false;
   // 残りの有効期間だけ覚えておけば十分 (KV の expirationTtl は最低 60 秒)。
   const remainSec = Math.ceil((Number(sess.exp) - Date.now()) / 1000);
   const ttl = Math.max(60, Number.isFinite(remainSec) ? remainSec : 60);
-  try { await env.VAULT.put(revKey(sess.n), '1', { expirationTtl: ttl }); } catch { /* ベストエフォート */ }
+  try {
+    await env.VAULT.put(revKey(sess.n), '1', { expirationTtl: ttl });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- session (signed cookie) ----
@@ -683,8 +693,19 @@ export default {
         if (!(await csrfOk(req, sess, env))) return json({ error: 'Invalid CSRF token.' }, 403);
         // Cookie を消すだけでは複製されたトークンが期限まで通る。
         // サーバー側の失効リストにも載せてから返す。
-        await revokeSession(env, sess);
-        return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', 0, secure) });
+        const revoked = await revokeSession(env, sess);
+        // このブラウザの Cookie は成否によらず消す (最低限そこは確実にログアウトする)。
+        const clear = { 'Set-Cookie': sessionCookie('', 0, secure) };
+        // 失効を書けなかったら 200 を返さない。200 は「このトークンはもう通らない」
+        // という約束であり、書けていない以上その約束が守れていない。
+        if (!revoked) {
+          return json(
+            { error: 'Logged out in this browser, but the session could not be revoked server-side. Rotate SESSION_SECRET if the cookie may have been copied.' },
+            500,
+            clear
+          );
+        }
+        return json({ ok: true }, 200, clear);
       }
 
       // ---- 一覧 ----
