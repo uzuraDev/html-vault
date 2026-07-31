@@ -54,7 +54,9 @@
   .demo-banner{padding:8px 14px;text-align:center;font-size:13px;background:#1d2735;border-bottom:1px solid var(--line);color:var(--txt)}
   .demo-banner a{color:var(--accent);text-decoration:none;font-weight:600}
   .demo-banner a:hover{text-decoration:underline}
-  body.demo #newBtn,body.demo #menuBtn,body.demo .del-item,body.demo .pin-item,body.demo #editBtn{display:none!important}
+  /* #menuBtn だけ隠すと .menu-wrap が空のフレックス項目として残り、
+     .sidebar-head の gap:8px が1つ余分に効くので包み側もまとめて隠す */
+  body.demo #newBtn,body.demo #menuBtn,body.demo .menu-wrap,body.demo .del-item,body.demo .pin-item,body.demo #editBtn{display:none!important}
 
   /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
   /* safe-area: viewport-fit=cover を宣言しているので、ノッチ/ホームインジケータ分を
