@@ -755,7 +755,19 @@ app.get('/api/snippets/:id/download', requireAuth, (req, res) => {
 app.get('/api/snippets/:id/preview', requireAuth, (req, res) => {
   const file = snippetPath(req.params.id);
   if (!file || !fs.existsSync(file)) {
-    return res.status(404).send(STR.notFound);
+    // このレスポンスはUI側の sandbox iframe 内に表示されるので JSON にはしない
+    // (利用者に生JSONが見えてしまう)。viewport が無いと iOS が980pxで描画するため付ける。
+    // STR.notFound は locales の固定文言でユーザー入力を含まない＝エスケープ不要。
+    return res
+      .status(404)
+      .type('text/html; charset=utf-8')
+      .send(
+        '<!doctype html><html lang="en"><meta charset="utf-8">' +
+          '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+          '<body style="font-family:sans-serif;padding:24px;color:#333"><p>' +
+          STR.notFound +
+          '</p></body></html>'
+      );
   }
   // このレスポンス自体は同一オリジンだが、UI側で sandbox iframe に入れる。
   // 万一直接アクセスされても Cookie を読めないよう、追加で隔離ヘッダを付与。
