@@ -491,7 +491,8 @@ async function phaseNormal() {
     }
   }
   {
-    // Past MAX_BYTES + headroom the body is rejected on Content-Length, before it is read.
+    // Past MAX_BYTES the HTML cannot be stored. 'x' does not get escaped, so this one
+    // clears the JSON envelope and is rejected by the handler's byte-length check.
     const r = await req('/api/snippets', {
       method: 'POST',
       headers: { ...authCsrf, 'content-type': 'application/json' },
@@ -501,14 +502,49 @@ async function phaseNormal() {
     check('body-limit: 11MB snippet create -> 413', r.status, 413);
   }
   {
-    // The rejected create must not have been stored.
+    // Past the JSON envelope (MAX_BYTES*2 + headroom) it is rejected on Content-Length,
+    // before a single byte of the body is read.
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'WayTooBig', html: 'x'.repeat(21 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 21MB snippet create -> 413 (before parsing)', r.status, 413);
+  }
+  {
+    // Regression: JSON escapes the body, so the request is larger than the HTML it
+    // carries. An all-quotes HTML doubles exactly (6MiB -> over 12MiB) while the stored
+    // HTML stays within the 10MiB cap. An envelope of MAX_BYTES + headroom turns this
+    // legitimate upload into a 413 (reported on PR #55).
+    const quoted = '"'.repeat(6 * 1024 * 1024);
+    const body = JSON.stringify({ title: 'QuoteHeavy', html: quoted });
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body,
+    });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'body-limit: 6MiB of HTML that doubles under JSON escaping is accepted',
+      r.status === 200 && bodyBytes > 10 * 1024 * 1024 + 256 * 1024,
+      `200 and request body > 10MiB+256KiB (actual ${bodyBytes} bytes)`,
+      `status=${r.status} bodyBytes=${bodyBytes}`
+    );
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
+    // The rejected creates must not have been stored.
     const r = await req('/api/snippets', { headers: authH });
     const b = await r.json().catch(() => ({}));
     const titles = (b.snippets || []).map((s) => s.title);
     record(
-      'body-limit: the 413 create is not stored',
-      !titles.includes('TooBigToStore'),
-      'list does not contain TooBigToStore',
+      'body-limit: the 413 creates are not stored',
+      !titles.includes('TooBigToStore') && !titles.includes('WayTooBig') && !titles.includes('QuoteHeavy'),
+      'list contains none of the rejected or cleaned-up titles',
       titles.join(',') || '(empty)'
     );
   }

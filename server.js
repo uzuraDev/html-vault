@@ -57,20 +57,35 @@ const BODY_LIMIT = `${MAX_UPLOAD_MB}mb`;
 // 経路を2段に分け、パーサへ渡す前に Content-Length で弾く。
 const SMALL_BODY_BYTES = 64 * 1024;
 const SMALL_BODY_LIMIT = `${SMALL_BODY_BYTES}b`;
-// Content-Length の早期検査に使う外枠。パーサ側の厳密な上限 (BODY_LIMIT / multer の
-// fileSize) より少しだけ緩くしてある。multipart の境界行や JSON のエスケープぶんで
-// 「本文は上限内なのにリクエスト全体では数百バイト超える」正当なアップロードを
-// 取りこぼさないため。厳密な判定は従来どおりパーサと createSnippet 側が行う。
+// Content-Length の早期検査に使う外枠。厳密な「HTML が MAX_UPLOAD_BYTES 以内か」の
+// 判定は従来どおりパーサと createSnippet 側が行い、ここは読み込むバイト数の上限。
+//
+// 外枠は Content-Type で変わる。multipart は境界行ぶんの数百バイトしか増えないが、
+// JSON は本文が文字列としてエスケープされるぶん膨らむ:
+//   " と \ が2バイトになる (最悪ケース: 全文が引用符の HTML → ちょうど2倍)
+//   改行・タブは \n \t の2バイト、非ASCII は UTF-8 のまま素通り
+// つまり「10MB以内の HTML」を包む外枠として MAX_UPLOAD_BYTES + 少しでは足りず、
+// 正当なアップロードを 413 にしてしまう。JSON 経路だけ2倍側の外枠を使う。
+// (\u00XX に展開される制御文字は6倍まで膨らむが、それらは保存対象の HTML には
+//  現れない。仮に来ても弾かれるのは「JSON にすると60MB級」の本文だけ。)
 const REQUEST_HEADROOM_BYTES = 256 * 1024;
 const MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + REQUEST_HEADROOM_BYTES;
+const MAX_JSON_REQUEST_BYTES = MAX_UPLOAD_BYTES * 2 + REQUEST_HEADROOM_BYTES;
+// body-parser 側の上限も同じ根拠で JSON だけ広げる。ここを BODY_LIMIT のままに
+// すると、Content-Length の検査を通ったあとパーサが entity.too.large で弾く。
+const JSON_BODY_LIMIT = `${MAX_JSON_REQUEST_BYTES}b`;
 
 // スニペットHTMLが載りうる経路 (= 大きい上限を許す経路)。
 // /api/snippets 配下と /mcp/<secret> (upload_html) だけ。それ以外は小さい上限で足りる。
 function isLargeBodyPath(p) {
   return p === '/api/snippets' || p.startsWith('/api/snippets/') || p.startsWith('/mcp/');
 }
-function requestLimitFor(p) {
-  return isLargeBodyPath(p) ? MAX_REQUEST_BYTES : SMALL_BODY_BYTES;
+function isJsonRequest(req) {
+  return (req.get('content-type') || '').includes('json');
+}
+function requestLimitFor(req) {
+  if (!isLargeBodyPath(req.path)) return SMALL_BODY_BYTES;
+  return isJsonRequest(req) ? MAX_JSON_REQUEST_BYTES : MAX_REQUEST_BYTES;
 }
 
 // HTTPSの背後 (リバースプロキシ) で動かすなら true を推奨
@@ -404,7 +419,7 @@ app.use(
 app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD') return next();
   const len = Number(req.get('content-length'));
-  if (Number.isFinite(len) && len > requestLimitFor(req.path)) {
+  if (Number.isFinite(len) && len > requestLimitFor(req)) {
     return res.status(413).json({ error: STR.bodyTooLarge });
   }
   next();
@@ -465,7 +480,7 @@ app.use((req, res, next) => {
 // 本文パーサ。スニペットHTMLを運ぶ経路 (かつ書き込み権限あり) だけ MAX_UPLOAD_MB を
 // 許し、それ以外 (認証など) は SMALL_BODY_LIMIT に落とす。
 // Content-Length を宣言しない (chunked) 場合はここが上限として効く。
-const jsonLarge = express.json({ limit: BODY_LIMIT });
+const jsonLarge = express.json({ limit: JSON_BODY_LIMIT });
 const jsonSmall = express.json({ limit: SMALL_BODY_LIMIT });
 const formLarge = express.urlencoded({ extended: false, limit: BODY_LIMIT });
 const formSmall = express.urlencoded({ extended: false, limit: SMALL_BODY_LIMIT });

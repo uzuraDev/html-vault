@@ -22,10 +22,19 @@ import INDEX_HTML from '../public/index.html';
 const MAX_BYTES = 10 * 1024 * 1024;
 // ---- リクエスト本文のサイズ上限 ------------------------------------------
 // MAX_BYTES は「保存するHTMLの上限」。こちらは「読み込むリクエスト本文の上限」で、
-// JSON のエスケープや multipart の境界行ぶんだけ外枠を広げてある
-// (本体が 10MB を超えていないかの判定は従来どおり createSnippet / PUT 側が行う)。
+// 本体が 10MB を超えていないかの判定は従来どおり createSnippet / PUT 側が行う。
+//
+// 外枠は Content-Type で変わる。multipart は境界行ぶんの数百バイトしか増えないが、
+// JSON は本文が文字列としてエスケープされるぶん膨らむ:
+//   " と \ が2バイトになる (最悪ケース: 全文が引用符の HTML → ちょうど2倍)
+//   改行・タブは \n \t の2バイト、非ASCII は UTF-8 のまま素通り
+// つまり「10MB以内の HTML」を包む外枠として MAX_BYTES + 少しでは足りず、正当な
+// アップロードを 413 にしてしまう。JSON 経路だけ2倍側の外枠を使う。
+// (\u00XX に展開される制御文字は6倍まで膨らむが、それらは保存対象の HTML には
+//  現れない。仮に来ても弾かれるのは「JSON にすると60MB級」の本文だけ。)
 const REQUEST_HEADROOM_BYTES = 256 * 1024;
 const MAX_REQUEST_BYTES = MAX_BYTES + REQUEST_HEADROOM_BYTES;
+const MAX_JSON_REQUEST_BYTES = MAX_BYTES * 2 + REQUEST_HEADROOM_BYTES;
 // パスワードのような小さな JSON しか運ばない経路 (= 未認証で叩ける経路) の上限。
 const SMALL_BODY_BYTES = 64 * 1024;
 const TOO_LARGE_MSG = 'Request body is too large.';
@@ -643,8 +652,8 @@ async function handleMcp(req, env, origin) {
   if (req.method === 'GET') return new Response('Method Not Allowed', { status: 405, headers: SEC_HEADERS });
   if (req.method !== 'POST') return new Response(null, { status: 405, headers: SEC_HEADERS });
 
-  // upload_html が HTML 全体を運ぶので上限は大きいが、無制限にはしない。
-  const parsed = await readJsonLimited(req, MAX_REQUEST_BYTES);
+  // upload_html が HTML 全体を JSON 文字列として運ぶので、外枠は JSON 側を使う。
+  const parsed = await readJsonLimited(req, MAX_JSON_REQUEST_BYTES);
   if (parsed.tooLarge) return tooLargeJson();
   if (parsed.parseError) return json(rpcError(null, -32700, 'Parse error'));
   const body = parsed.value;
@@ -672,9 +681,9 @@ export default {
     const demo = isDemo(env);
 
     // ルーティングに入る前の共通ガード。どの経路にも当てはまらないほど大きな本文は
-    // ここで打ち切る (未知パス・未認証パスもまとめて塞ぐ)。経路ごとの細かい上限は
-    // 各ハンドラが SMALL_BODY_BYTES / MAX_REQUEST_BYTES で追加で課す。
-    if (declaredTooLarge(req, MAX_REQUEST_BYTES)) return tooLargeJson();
+    // ここで打ち切る (未知パス・未認証パスもまとめて塞ぐ)。ここは全経路の外枠なので
+    // いちばん広い JSON 側を使い、経路ごとの細かい上限は各ハンドラが追加で課す。
+    if (declaredTooLarge(req, MAX_JSON_REQUEST_BYTES)) return tooLargeJson();
 
     // DEMO_MODE (閲覧専用) はセッションを発行しないので SESSION_SECRET 無しでも動く
     if (!env.SESSION_SECRET && !demo) {
@@ -894,9 +903,12 @@ export default {
         const ct = req.headers.get('content-type') || '';
         // multipart も JSON も、まず上限つきでバイト列として受け切る。
         // req.formData() / req.json() は上限を持たないので直接は呼ばない。
-        const read = await readBodyBytes(req, MAX_REQUEST_BYTES);
+        // 外枠は Content-Type ごと: multipart は境界行ぶんだけ、JSON はエスケープで
+        // 最大2倍に膨らむぶんを見込む (MAX_JSON_REQUEST_BYTES の定義を参照)。
+        const isMultipart = ct.includes('multipart/form-data');
+        const read = await readBodyBytes(req, isMultipart ? MAX_REQUEST_BYTES : MAX_JSON_REQUEST_BYTES);
         if (!read.ok) return tooLargeJson();
-        if (ct.includes('multipart/form-data')) {
+        if (isMultipart) {
           // 読み終えたバイト列から multipart を解釈し直す (Response 経由が唯一の手)
           const form = await new Response(read.bytes, { headers: { 'content-type': ct } }).formData();
           const file = form.get('file');
@@ -1071,7 +1083,8 @@ export default {
         const list = await loadIndex(env);
         const meta = list.find((s) => s.id === id);
         if (!meta) return json({ error: 'Not found.' }, 404);
-        const parsed = await readJsonObject(req, MAX_REQUEST_BYTES);
+        // html を JSON 文字列として運ぶ経路なので、外枠は JSON 側。
+        const parsed = await readJsonObject(req, MAX_JSON_REQUEST_BYTES);
         if (parsed.tooLarge) return tooLargeJson();
         const b = parsed.value;
         let contentChanged = false;

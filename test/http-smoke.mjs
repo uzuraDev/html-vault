@@ -720,8 +720,8 @@ async function phaseNormal() {
     }
   }
   {
-    // MAX_UPLOAD_MB (10MB) + 余裕分を超える本文は 413。Content-Length を見て
-    // パースの前に弾くので、ハンドラまで届かない。
+    // 保存上限 (10MB) を超える HTML は 413。'x' はエスケープされないので JSON の
+    // 外枠は通り、ハンドラの byteLength 検査で弾かれる経路。
     const r = await req('/api/snippets', {
       method: 'POST',
       headers: jsonCsrf,
@@ -731,14 +731,51 @@ async function phaseNormal() {
     check('body-limit: 11MB のスニペット作成 -> 413', r.status, 413);
   }
   {
+    // 外枠 (MAX_UPLOAD_BYTES*2 + 余裕分) すら超える本文は、Content-Length を見て
+    // パースの前に弾く。ハンドラまで届かない。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'WayTooBig', html: 'x'.repeat(21 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 21MB のスニペット作成 -> 413 (パース前)', r.status, 413);
+  }
+  {
+    // 回帰: JSON は本文をエスケープするので、リクエスト全体は HTML より大きくなる。
+    // 引用符だけの HTML はちょうど2倍 (6MiB -> 12MiB超) に膨らむが、保存されるのは
+    // 6MiB で上限内。外枠を MAX_UPLOAD_BYTES + 少し にしていると、この正当な
+    // アップロードを 413 にしてしまう (PR #55 の指摘)。
+    const quoted = '"'.repeat(6 * 1024 * 1024);
+    const body = JSON.stringify({ title: 'QuoteHeavy', html: quoted });
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body,
+    });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'body-limit: JSON エスケープで2倍に膨らむ 6MiB の HTML は通る',
+      r.status === 200 && Buffer.byteLength(body) > 10 * 1024 * 1024 + 256 * 1024,
+      `200 かつ リクエスト本文 > 10MiB+256KiB (実際 ${Buffer.byteLength(body)} バイト)`,
+      `status=${r.status} bodyBytes=${Buffer.byteLength(body)}`
+    );
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
     // 413 で弾かれた作成が保存されていないことの裏取り。
     const r = await req('/api/snippets', { headers: authH });
     const b = await r.json().catch(() => ({}));
     const titles = (b.snippets || []).map((s) => s.title);
     record(
       'body-limit: 413 になった作成が一覧に残っていない',
-      !titles.includes('TooBigToStore') && !titles.includes('BigButAllowed'),
-      'TooBigToStore も BigButAllowed も含まない',
+      !titles.includes('TooBigToStore') &&
+        !titles.includes('WayTooBig') &&
+        !titles.includes('BigButAllowed') &&
+        !titles.includes('QuoteHeavy'),
+      '413 になった2件も、作成後に削除した2件も含まない',
       titles.join(',') || '(空)'
     );
   }
