@@ -106,6 +106,11 @@
   .toolbar{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
   /* タップ領域 40px。幅の media query では囲わない (横向きのスマホも対象にする) */
   .toolbar input{height:40px}
+  /* type="search" のネイティブ装飾を無効化し、他の input と同じ見た目に揃える */
+  .toolbar input[type=search]{-webkit-appearance:none;appearance:none}
+  .toolbar input[type=search]::-webkit-search-decoration{-webkit-appearance:none}
+  /* 本文検索の進行状況 (検索中 / 打ち切り)。非表示時は .hide で高さごと消す */
+  .search-status{padding:6px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
   #newBtn{flex:none;width:40px;height:40px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
   /* UI_HIDE_NEW=1 でビルドしたとき（MCP 中心運用向け）。要素は DOM に残し、表示だけ消す */
   body.hide-new #newBtn{display:none!important}
@@ -269,9 +274,10 @@
         <button class="icon-btn" id="collapseBtn" title="{{collapseMenu}}" aria-label="{{collapseMenu}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
       </div>
       <div class="toolbar">
-        <input id="search" placeholder="{{searchPlaceholder}}">
+        <input id="search" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{{searchPlaceholder}}" aria-label="{{searchPlaceholder}}">
         <button class="primary" id="newBtn" title="{{newTitle}}" aria-label="{{newTitle}}">＋</button>
       </div>
+      <div class="search-status hide" id="searchStatus" aria-live="polite"></div>
       <div class="list" id="list"></div>
       <div class="sb-resizer" id="sbResizer"></div>
     </aside>
@@ -391,6 +397,9 @@ async function loadList(){
   const r = await api('GET','/api/snippets');
   CSRF = r.csrf || CSRF;
   SNIPPETS = r.snippets;
+  // 保存/削除/ピン留め/再読込のたびにここを通るので、検索結果の memo はまとめて捨てる
+  // (古い抜粋や消えたスニペットを返し続けないため)。
+  searchMemo.clear();
   renderList();
 }
 // 検索結果(サーバー)を表示中なら SEARCH_RESULTS を、未検索なら SNIPPETS を描画する。
@@ -614,7 +623,11 @@ function fmtBytes(b){ if(b<1024) return b+'B'; if(b<1024*1024) return (b/1024).t
 $('loginBtn').onclick = login;
 $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 $('logoutBtn').onclick = logout;
-
+// 検索は2段構え。
+//  1. タイトル/タグは手元の SNIPPETS だけで絞り込んで同期で描画する (ネットワーク往復なし)。
+//     1文字目から効く。
+//  2. 本文検索だけを ~150ms デバウンスでサーバーへ投げ、届いた時点で結果を丸ごと差し替える
+//     (サーバー結果はローカル結果の上位集合とは限らないため、マージせず置き換える)。
 // ---- アカウントメニュー (ヘッダの「⋯」。中身はログアウトのみ) ----
 function setMenu(open){
   $('accountMenu').classList.toggle('hide', !open);
@@ -652,47 +665,125 @@ function handleKey(e){
   openModal(false);
 }
 document.addEventListener('keydown', handleKey);
-// 検索: q が空なら全件 (SNIPPETS) を表示。2文字以上ならサーバーで本文も含めて検索する。
-// 入力のたびに走らせないよう ~200ms デバウンスする。
 let searchTimer = null;
 let searchAbort = null; // 進行中の検索リクエスト
 let searchSeq = 0;      // 発行順。古い応答が後勝ちで上書きするのを防ぐ
-async function runSearch(){
-  const q = $('search').value.trim();
+let composing = false;  // IME変換中か (isComposing が揺れる環境向けの保険)
+// 同じクエリの再入力 (バックスペースで消して打ち直す等) でサーバーへ投げ直さないための memo。
+// 内容が変わりうる操作 (保存/削除/ピン留め/再読込) の後は loadList() でまとめて捨てる。
+const SEARCH_MEMO_MAX = 50;
+const searchMemo = new Map(); // q -> { results, truncated, scanned }
+function memoPut(q, payload){
+  if(searchMemo.has(q)) searchMemo.delete(q);
+  searchMemo.set(q, payload);
+  // 挿入順に古いものから捨てる (Map は挿入順を保つ)
+  while(searchMemo.size > SEARCH_MEMO_MAX) searchMemo.delete(searchMemo.keys().next().value);
+}
+
+// 計測は ?debug=perf のときだけ。通常アクセスでは performance.* を1回も呼ばない。
+const PERF = (function(){ try{ return location.search.indexOf('debug=perf') !== -1; }catch{ return false; } })();
+function perfMark(name){ if(PERF){ try{ performance.mark(name); }catch{} } }
+function perfMeasure(name, from, to){
+  if(!PERF) return;
+  try{
+    const m = performance.measure(name, from, to);
+    console.table([{ measure: name, ms: Math.round(m.duration * 100) / 100 }]);
+  }catch{}
+}
+
+function setSearchStatus(text){
+  const el = $('searchStatus');
+  el.textContent = text || '';
+  el.classList.toggle('hide', !text);
+}
+
+// 手元の SNIPPETS のタイトル/タグだけを絞り込む。サーバー応答の待ち時間が無い。
+// 並びは filter だけで作る (sort しない) — 表示順はサーバーが決めているため、
+// ここで並べ替えると本文検索の結果が届いた瞬間に順序が飛ぶ。
+function applyLocalFilter(q){
   SEARCH_Q = q;
-  // 前の検索がまだ飛んでいたら打ち切る (サーバ側の無駄な全走査も止まる)。
-  // 発行番号は必ず進める — 2文字未満で抜ける場合も進めないと、AbortController が
-  // 無い環境で「遅れて届いた古い応答」が全件表示を上書きしてしまう。
-  const seq = ++searchSeq;
-  if(searchAbort) searchAbort.abort();
-  searchAbort = null;
-  if(q.length < 2){
-    SEARCH_RESULTS = null; // 全件表示にフォールバック
+  if(!q){
+    SEARCH_RESULTS = null; // 全件表示に戻す
     renderList();
     return;
   }
+  const needle = q.toLowerCase();
+  SEARCH_RESULTS = SNIPPETS.filter(s=>
+    (s.title||'').toLowerCase().includes(needle) || (s.tags||'').toLowerCase().includes(needle)
+  ).map(s=>({ ...s, field:'title', excerpt:'' }));
+  renderList();
+}
+
+function showBodyResults(payload){
+  SEARCH_RESULTS = payload.results;
+  // 打ち切られた場合は黙って結果を欠かさず、対象件数を出す。
+  setSearchStatus(payload.truncated ? T.searchTruncated.split('{n}').join(String(payload.scanned)) : '');
+  renderList();
+}
+
+// 進行中の本文検索を無効化する。発行番号を進めてから打ち切るので、
+// 「打ち切りが間に合わずに届いた応答」も seq 比較で捨てられる。
+// 入力のたびに即座に呼ぶこと — デバウンス後の runBodySearch まで遅らせると、
+// その隙間に古い応答が届いてローカル絞り込みの表示を上書きしてしまう。
+function invalidateBodySearch(){
+  const seq = ++searchSeq;
+  if(searchAbort) searchAbort.abort();
+  searchAbort = null;
+  return seq;
+}
+
+// 本文検索 (サーバー)。タイトル/タグ側は applyLocalFilter が既に描画済み。
+async function runBodySearch(){
+  const q = $('search').value.trim();
+  SEARCH_Q = q;
+  const seq = invalidateBodySearch();
+  // 1文字以下はローカル絞り込みのみ。ここでローカル結果を引き直しておく
+  // (直前の表示が古い本文検索の結果だった場合に、現在のクエリへ確定させる)。
+  if(q.length < 2){ setSearchStatus(''); applyLocalFilter(q); return; }
+  const memo = searchMemo.get(q);
+  if(memo){ showBodyResults(memo); return; }
   const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
   searchAbort = ctl;
+  setSearchStatus(T.searching);
   try{
     const r = await api('GET','/api/search?q='+encodeURIComponent(q), null, false, ctl && ctl.signal);
     // 応答が前後しても、最後に発行した検索の結果だけを採用する。
-    if(seq !== searchSeq) return;
+    // 検索欄の現在値とも突き合わせる (seq の更新漏れが起きても表示は守られる)。
+    if(seq !== searchSeq || $('search').value.trim() !== q) return;
     CSRF = r.csrf || CSRF;
-    SEARCH_RESULTS = r.results || [];
-    renderList();
+    const payload = { results: r.results || [], truncated: !!r.truncated, scanned: r.scanned || 0 };
+    memoPut(q, payload);
+    showBodyResults(payload);
+    perfMark('hv:search:paint');
+    perfMeasure('hv:search:body', 'hv:search:input', 'hv:search:paint');
   }catch(e){
-    // 自分で打ち切ったものは失敗ではないので、フォールバックさせない。
+    // 自分で打ち切ったものは失敗ではないので、表示を触らない。
     if(e && e.name === 'AbortError') return;
     if(seq !== searchSeq) return;
-    // 検索が失敗してもクライアント側のタイトル/タグ絞り込みにフォールバックする。
-    const needle = q.toLowerCase();
-    SEARCH_RESULTS = SNIPPETS.filter(s=>
-      (s.title||'').toLowerCase().includes(needle) || (s.tags||'').toLowerCase().includes(needle)
-    ).map(s=>({ ...s, field:'title', excerpt:'' }));
-    renderList();
+    // 本文検索が落ちても、ローカル絞り込みの結果はそのまま残す (以前のフォールバックと同じ内容)。
+    setSearchStatus('');
   }
 }
-$('search').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 200); };
+// 一覧の再取得/更新後に呼ばれる。旧 runSearch と同じ「今のクエリで引き直す」役割。
+async function runSearch(){
+  applyLocalFilter($('search').value.trim());
+  await runBodySearch();
+}
+function onSearchInput(){
+  perfMark('hv:search:input');
+  // 入力した瞬間に、飛んでいる本文検索を無効化する。デバウンス後まで待つと、
+  // その間に届いた古い応答が新しいローカル絞り込みを上書きする。
+  invalidateBodySearch();
+  applyLocalFilter($('search').value.trim());
+  perfMark('hv:search:paint');
+  perfMeasure('hv:search:local', 'hv:search:input', 'hv:search:paint');
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runBodySearch, 150);
+}
+// IME変換中は中間状態ごとに検索しない。確定時 (compositionend) に1回だけ走らせる。
+$('search').addEventListener('compositionstart', ()=>{ composing = true; });
+$('search').addEventListener('compositionend', ()=>{ composing = false; onSearchInput(); });
+$('search').oninput = (e)=>{ if(composing || (e && e.isComposing)) return; onSearchInput(); };
 $('newBtn').onclick = ()=>openModal(false);
 $('mCancel').onclick = closeModal;
 $('mSave').onclick = save;

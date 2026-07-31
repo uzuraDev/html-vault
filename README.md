@@ -163,6 +163,15 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 | `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [stdio MCP server](#mcp-integration-headless-upload). |
 | `MCP_SECRET_PATH` | unset (disabled) | Enables the remote MCP endpoint `/mcp/<MCP_SECRET_PATH>` for claude.ai-style custom connectors (404 when unset). Generate with `openssl rand -hex 24`. |
 
+### Search performance (dev)
+
+Typing filters titles/tags instantly from data already in the browser; only body search hits the server (~150 ms debounce, one request per settled query, cancelled on the next keystroke). IME composition is ignored until you commit.
+
+- `GET /api/search?q=…&excerpt=0` — skips reading bodies for rows already matched by title/tag. Faster on large vaults, but those rows come back without an excerpt. Omit it (the default, and what the UI sends) to keep excerpts.
+- `/api/search` returns `Server-Timing: search;dur=…` so DevTools → Network → Timing shows server scan time separately from round-trip.
+- Open the UI with `?debug=perf` to log input→repaint timings via `console.table`. Nothing is measured without the flag.
+- Need a realistic dataset? `node scripts/seed-local.mjs 200 data-seed` writes 200 snippets to `data-seed/`, then `DATA_DIR=data-seed npm start`. **Never point it at your real `data/`** — it refuses to overwrite an existing `index.json` unless you pass `--force`.
+
 ### Hiding the ＋ button (`UI_HIDE_NEW`, build-time)
 
 If you save snippets through [MCP](#mcp-integration-headless-upload) and want the browser UI to stay read-ish, build with `UI_HIDE_NEW=1`. The ＋ button is hidden (the element stays in the DOM, CSS-hidden); pressing `n` still opens the new-snippet modal, and `Escape` closes it. Write APIs are **not** blocked — this is a UI preference, not an access control.

@@ -282,6 +282,11 @@ let searchCacheChars = 0;
 // 件数の上限6は Workers の「応答ヘッダ待ちの同時接続」上限に合わせたもの (超える分はキューされる)。
 const KV_READ_CONCURRENCY = 6;
 const KV_READ_MAX_BYTES = 4 * 1024 * 1024;
+// 本文走査の上限件数。アイソレートが破棄された後 (個人利用では頻繁に起きる) の最初の検索は
+// 本文キャッシュが空なので、対象全件ぶんの KV read がそのまま待ち時間になる。表示順の先頭
+// この件数までで打ち切り、打ち切ったことは必ずレスポンス (truncated/scanned) で伝える
+// — 黙って結果が欠けるのが一番まずい。タイトル/タグ一致は打ち切りの対象外。
+const BODY_SCAN_LIMIT = 300;
 
 // list を上の2条件でチャンクに割る。1件だけで上限を超える場合はその1件でチャンクを作る
 // (「1件ずつ」に縮退するので、巨大スニペットでもメモリは悪化しない)。
@@ -732,10 +737,13 @@ export default {
           if (!tokenOk && !sess) return json({ error: 'Unauthorized.' }, 401);
           if (sess) csrf = await csrfFor(env.SESSION_SECRET, sess.n);
         }
+        // 走査時間 (Server-Timing で返す)。Workers の Date.now() は I/O を跨いだときだけ進むので、
+        // ここで測れるのは実質「KV 待ちの合計」。本文取得が支配的なので目的には足りる。
+        const t0 = Date.now();
         const q = String(url.searchParams.get('q') || '').trim();
         if (q.length < 2) {
-          // 2文字未満は検索しない (空。UI側は全件表示にフォールバック)
-          return json({ results: [], q, csrf });
+          // 2文字未満は検索しない (空。UI側はクライアント側の絞り込みだけで表示する)
+          return json({ results: [], q, csrf }, 200, { 'Server-Timing': 'search;dur=0;desc="scan"' });
         }
         const needle = q.toLowerCase();
         const list = (await loadIndex(env)).sort(byDisplayOrder);
@@ -755,11 +763,14 @@ export default {
           excerpt: '',
         }));
         const needBody = rows.filter((r) => !r.inTitle && !r.inTags && validId(r.meta.id));
+        // 上限を超える分は走査しない (rows は表示順なので、先頭 = ピン留め/新しいものが残る)。
+        const truncated = needBody.length > BODY_SCAN_LIMIT;
+        const scanTargets = truncated ? needBody.slice(0, BODY_SCAN_LIMIT) : needBody;
         // 本文はまとめて並行取得する。1件ずつ await すると件数分の往復を直列に待つことになる。
         // (KV への read 回数は従来と同じ = サブリクエスト上限への影響は変わらない)
         // 判定と抜粋の生成はチャンクの中で終わらせ、本文への参照はチャンクを抜ける前に捨てる。
         // 対象ぶんを同時に生かすと、件数に比例してアイソレートのメモリ(128MB)を食い潰す。
-        for (const chunk of chunkForRead(needBody, (r) => r.meta.bytes)) {
+        for (const chunk of chunkForRead(scanTargets, (r) => r.meta.bytes)) {
           await Promise.all(
             chunk.map(async (r) => {
               const body = await getSearchText(env, r.meta);
@@ -786,7 +797,9 @@ export default {
             excerpt: r.excerpt,
           });
         }
-        return json({ results, q, csrf });
+        return json({ results, q, csrf, truncated, scanned: scanTargets.length }, 200, {
+          'Server-Timing': 'search;dur=' + (Date.now() - t0) + ';desc="scan"',
+        });
       }
 
       // ---- 作成 (貼り付け or アップロード) ----
