@@ -99,11 +99,12 @@ Both implementations share the same core protections:
 | Unauthorized access | Login required; login rate limit (10 / 15 min) |
 | CSRF | Double-submit token on mutating APIs |
 | Path traversal | Server-generated IDs, 32-hex only |
+| Stolen session token | Logout revokes the session server-side; changing the password invalidates every existing session |
 
 Implementation differences:
 
-- **Docker**: bcrypt password hashing, security headers via helmet, server-side sessions with HttpOnly / `SameSite=Strict` / Secure (HTTPS) cookies
-- **Workers**: PBKDF2-SHA256 password hashing, hand-written security headers, stateless HMAC-signed cookies (HttpOnly / `SameSite=Lax` / Secure) with timing-safe comparison
+- **Docker**: bcrypt password hashing, security headers via helmet, server-side sessions with HttpOnly / `SameSite=Strict` / Secure (HTTPS) cookies. Logout deletes the session from `data/sessions.json`; each session carries a fingerprint of the password hash, so running `setpass.js` logs every session out
+- **Workers**: PBKDF2-SHA256 password hashing, hand-written security headers, HMAC-signed cookies (HttpOnly / `SameSite=Lax` / Secure) with timing-safe comparison. The cookie carries a fingerprint of `AUTH_HASH`, so rotating the secret with `npm run setpass` invalidates every session immediately; logout adds the session to a KV revocation list (KV is eventually consistent, so a revoked token can survive up to ~60s at other edge locations). If that write fails, logout answers `500` instead of `200` — the browser cookie is cleared either way, but a `200` is a promise that the token itself is dead, so it is not given when the revocation did not land. Reads of the revocation list fail closed: while KV is unreachable, sessions are rejected rather than trusted
 
 When self-hosting publicly: use HTTPS and a fixed `SESSION_SECRET`. Optionally add a front gate (Basic auth / Cloudflare Access).
 

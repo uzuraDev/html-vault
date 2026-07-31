@@ -22,6 +22,8 @@
  *   1. normal   — MCP_SECRET_PATH と API_TOKEN を設定した通常構成
  *   2. minimal  — 両方とも未設定。/mcp が 404 であること・Bearer が無効であることを見る。
  *                 最後にログインのレート制限を確認する (ログイン回数を使い切るので必ず末尾)
+ *   3. revoke   — ログアウトとパスワード変更でセッションがサーバー側から失効すること。
+ *                 data/auth.json を差し替える = パスワードが変わるので必ず末尾に置く
  *
  * 使い方: node test/http-smoke.mjs
  * 環境変数: HV_PORT (既定 3799。フェーズごとに +1 して使う) / HV_PASSWORD /
@@ -29,10 +31,15 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// server.js と同じ bcryptjs を使って auth.json を書き換える (= npm run setpass 相当)。
+const require = createRequire(import.meta.url);
+const bcrypt = require('bcryptjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -52,6 +59,10 @@ const LOGIN_LIMIT = 10;
 
 // 使い捨ての DATA_DIR。既存の data/ を絶対に触らない。
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'hv-express-smoke-'));
+const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
+const SESSION_FILE = path.join(DATA_DIR, 'sessions.json');
+// revoke フェーズで setpass 相当の差し替えに使う新パスワード。
+const NEW_PASSWORD = process.env.HV_NEW_PASSWORD || 'smoke-rotated-pass-5678';
 
 // ---- 結果の集計 -----------------------------------------------------------
 const results = [];
@@ -126,6 +137,22 @@ function extractSess(res) {
     if (m) return { value: m[1], raw: line };
   }
   return null;
+}
+// Cookie 値は署名付きの `s:<sid>.<sig>` (URLエンコード済み)。sid だけ取り出す。
+// sessions.json のキーが sid なので、サーバー側に実体が残っていないかを直接見られる。
+function sidOf(cookieValue) {
+  const raw = decodeURIComponent(String(cookieValue || ''));
+  const m = /^s:([^.]+)\./.exec(raw);
+  return m ? m[1] : '';
+}
+function sessionStoreHas(sid) {
+  if (!sid) return false;
+  try {
+    const obj = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    return Object.prototype.hasOwnProperty.call(obj, sid);
+  } catch {
+    return false; // ファイルが無い = 実体も無い
+  }
 }
 
 // ---- サーバープロセスの生死 ----------------------------------------------
@@ -788,6 +815,118 @@ async function phaseMinimal() {
 }
 
 // ===========================================================================
+//  PHASE 3: revoke (ログアウト / パスワード変更でのセッション失効)
+//  auth.json を差し替える = 以降このパスワードでしかログインできなくなるので、
+//  必ず最後のフェーズに置く。
+// ===========================================================================
+async function phaseRevoke() {
+  console.log('\n=== PHASE: revoke ===');
+
+  // --- 独立したセッションを2つ作る (A: ログアウトする側 / B: 残す側) ---
+  const resA = await login(PASSWORD);
+  const bodyA = await resA.json().catch(() => ({}));
+  const sessA = extractSess(resA);
+  const resB = await login(PASSWORD);
+  const bodyB = await resB.json().catch(() => ({}));
+  const sessB = extractSess(resB);
+  if (!sessA || !sessB) throw new Error('revoke フェーズのログインに失敗したので続行できない');
+  const headA = { Cookie: `hv.sid=${sessA.value}` };
+  const headB = { Cookie: `hv.sid=${sessB.value}` };
+  const csrfHeadA = { ...headA, 'x-csrf-token': bodyA.csrf };
+  const csrfHeadB = { ...headB, 'x-csrf-token': bodyB.csrf };
+  const sidA = sidOf(sessA.value);
+  const sidB = sidOf(sessB.value);
+
+  check('revoke: セッションA は有効 -> 200', (await req('/api/snippets', { headers: headA })).status, 200);
+  check('revoke: セッションB は有効 -> 200', (await req('/api/snippets', { headers: headB })).status, 200);
+  record(
+    'revoke: 2セッションがサーバー側に実体を持つ',
+    sidA !== '' && sidB !== '' && sidA !== sidB && sessionStoreHas(sidA) && sessionStoreHas(sidB),
+    'sessions.json に両方の sid がある',
+    `sidA=${sidA ? 'あり' : 'なし'}(store=${sessionStoreHas(sidA)}) sidB=${sidB ? 'あり' : 'なし'}(store=${sessionStoreHas(sidB)})`
+  );
+
+  // --- ログアウト: サーバー側の実体まで消えること ---
+  check('revoke: logout A -> 200', (await req('/api/logout', { method: 'POST', headers: csrfHeadA })).status, 200);
+  check('revoke: logout 後の A で読み取り -> 401', (await req('/api/snippets', { headers: headA })).status, 401);
+  {
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...csrfHeadA, 'content-type': 'application/json' },
+      body: JSON.stringify({ html: '<p>after-logout</p>', title: 'nope' }),
+    });
+    check('revoke: logout 後の A で書き込み -> 401', r.status, 401);
+  }
+  {
+    const r = await req('/api/me', { headers: headA });
+    const b = await r.json().catch(() => ({}));
+    check('revoke: logout 後の A で /api/me -> authed:false', b.authed, false);
+  }
+  record(
+    'revoke: logout でサーバー側のセッション実体が消える',
+    !sessionStoreHas(sidA),
+    'sessions.json に sidA が無い',
+    `store=${sessionStoreHas(sidA)}`
+  );
+  // 片方のログアウトが他方を巻き込まないこと (巻き込むと「全部落ちるから通った」だけになる)
+  check('revoke: A の logout は B に影響しない -> 200', (await req('/api/snippets', { headers: headB })).status, 200);
+
+  // --- パスワード変更: 既存セッションが全て無効になること ---
+  // npm run setpass と同じことをする (auth.json の hash を差し替える)。
+  fs.writeFileSync(AUTH_FILE, JSON.stringify({ hash: bcrypt.hashSync(NEW_PASSWORD, 10) }, null, 2));
+
+  check('revoke: パスワード変更後の B で読み取り -> 401', (await req('/api/snippets', { headers: headB })).status, 401);
+  {
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...csrfHeadB, 'content-type': 'application/json' },
+      body: JSON.stringify({ html: '<p>after-rotate</p>', title: 'nope' }),
+    });
+    check('revoke: パスワード変更後の B で書き込み -> 401', r.status, 401);
+  }
+  {
+    const r = await req(`/api/snippets/order`, {
+      method: 'PUT',
+      headers: { ...csrfHeadB, 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [] }),
+    });
+    check('revoke: パスワード変更後の B で並べ替え -> 401', r.status, 401);
+  }
+  {
+    const r = await req('/api/me', { headers: headB });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'revoke: パスワード変更後の B で /api/me -> authed:false csrf:null',
+      r.status === 200 && b.authed === false && b.csrf === null,
+      '200 authed=false csrf=null',
+      `status=${r.status} authed=${b.authed} csrf=${b.csrf}`
+    );
+  }
+  record(
+    'revoke: パスワード変更でサーバー側のセッション実体も破棄される',
+    !sessionStoreHas(sidB),
+    'sessions.json に sidB が無い',
+    `store=${sessionStoreHas(sidB)}`
+  );
+
+  // --- 新しいパスワードだけが通り、そのセッションは正常に使えること ---
+  check('revoke: 旧パスワードでのログイン -> 401', (await login(PASSWORD)).status, 401);
+  const resC = await login(NEW_PASSWORD);
+  const bodyC = await resC.json().catch(() => ({}));
+  const sessC = extractSess(resC);
+  record(
+    'revoke: 新パスワードでログインできる',
+    resC.status === 200 && !!sessC && typeof bodyC.csrf === 'string',
+    '200 で hv.sid Cookie と csrf が返る',
+    `status=${resC.status} cookie=${!!sessC}`
+  );
+  if (sessC) {
+    const headC = { Cookie: `hv.sid=${sessC.value}` };
+    check('revoke: 新セッションで読み取り -> 200', (await req('/api/snippets', { headers: headC })).status, 200);
+  }
+}
+
+// ===========================================================================
 //  MAIN
 // ===========================================================================
 async function main() {
@@ -805,6 +944,9 @@ async function main() {
 
     await restart({}); // MCP秘匿パスとAPIトークンを外し、レート制限のカウンタもリセットする
     await phaseMinimal();
+
+    await restart({}); // phaseMinimal でログイン回数を使い切っているのでプロセスごと入れ替える
+    await phaseRevoke();
   } finally {
     killServer();
   }

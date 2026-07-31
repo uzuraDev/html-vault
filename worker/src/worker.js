@@ -4,7 +4,10 @@
  * 設計:
  *  - HTML本体/メタは KV (binding: VAULT) に保存
  *  - パスワードは PBKDF2(WebCrypto) 検証 (平文保存しない)
- *  - セッションは HMAC 署名 Cookie (ステートレス。サーバ側保存なし)
+ *  - セッションは HMAC 署名 Cookie。パスワード(AUTH_HASH)の指紋を焼き込むので
+ *    パスワードを変えれば既存セッションは全て無効になる
+ *  - ログアウトは Cookie を消すだけでなく KV の失効リストにも載せる (盗まれた
+ *    トークンを期限まで生かさない)
  *  - 変更系API は CSRF トークン必須 (セッションnonce由来のHMAC)
  *  - プレビューは sandbox CSP 付きで返し、直接アクセスでも本体オリジンと分離
  *  - 生ソースは text/plain。ファイルIDはサーバ採番 + 16進32文字検証 (パストラバーサル不可)
@@ -72,15 +75,62 @@ async function verifyPassword(password, stored) {
   } catch { return false; }
 }
 
+// ---- 認証バージョン (パスワード変更で既存セッションを一括失効させる) ----
+// セッションにはログイン時点のパスワードハッシュ(env.AUTH_HASH)の指紋を焼き込む。
+// setpass.mjs で AUTH_HASH Secret を差し替えると指紋が変わり、以前に発行した
+// 署名Cookieは readSession で弾かれる = 全セッションが即座に無効になる。
+// Secret は強整合・即時反映なので、KV のような伝播待ちが無い。
+// 指紋はハッシュそのものではなく SHA-256 の先頭16文字 (Cookie に載るため)。
+let authVersionCache = null; // { src, version }
+async function authVersion(env) {
+  const src = env.AUTH_HASH ? String(env.AUTH_HASH) : '';
+  if (!src) return '';
+  if (authVersionCache && authVersionCache.src === src) return authVersionCache.version;
+  const digest = await crypto.subtle.digest('SHA-256', enc.encode(src));
+  const version = b64uEncode(digest).slice(0, 16);
+  authVersionCache = { src, version };
+  return version;
+}
+
+// ---- セッション失効リスト (ログアウトをサーバー側で効かせる) ----
+// セッションはステートレスな署名Cookieなので、Cookie を消すだけでは
+// 盗まれた/複製されたトークンが有効期限まで通ってしまう。ログアウト時に
+// nonce を KV の失効リストへ載せ、認証のたびに引く。
+// 注意: KV は結果整合 (既定の読みキャッシュ 60 秒) なので、別 PoP へ失効が
+// 行き渡るまで最大 1 分程度かかりうる。厳密な即時失効が要るなら Durable Object
+// を使うこと。ログイン試行カウンタ (rl:) と同じ割り切り。
+function revKey(nonce) { return 'rev:' + nonce; }
+// 失効リストの読みは fail-closed にする。KV が引けないときに false を返すと
+// 「失効済みの Cookie が有効扱いされる」= ログアウトが効かなくなる方向に倒れる。
+// 逆に倒すと KV 障害中は全員ログアウトになるが、失効を守るほうを取る。
+async function isRevoked(env, nonce) {
+  if (!env.VAULT || !nonce) return false;
+  try { return (await env.VAULT.get(revKey(nonce))) !== null; } catch { return true; }
+}
+// 書き込めたときだけ true。呼び出し側は失敗を成功として返してはいけない
+// (200 を返した時点で「このセッションはもう通らない」と約束することになる)。
+async function revokeSession(env, sess) {
+  if (!env.VAULT || !sess || !sess.n) return false;
+  // 残りの有効期間だけ覚えておけば十分 (KV の expirationTtl は最低 60 秒)。
+  const remainSec = Math.ceil((Number(sess.exp) - Date.now()) / 1000);
+  const ttl = Math.max(60, Number.isFinite(remainSec) ? remainSec : 60);
+  try {
+    await env.VAULT.put(revKey(sess.n), '1', { expirationTtl: ttl });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---- session (signed cookie) ----
-async function makeSession(secret) {
+async function makeSession(secret, version) {
   const nonce = b64uEncode(crypto.getRandomValues(new Uint8Array(16)));
   const exp = Date.now() + SESSION_TTL_MS;
-  const payload = b64uEncode(enc.encode(JSON.stringify({ a: 1, n: nonce, exp })));
+  const payload = b64uEncode(enc.encode(JSON.stringify({ a: 1, n: nonce, v: version || '', exp })));
   const sig = await hmacSign(secret, payload);
   return { token: payload + '.' + sig, nonce };
 }
-async function readSession(secret, token) {
+async function readSession(secret, token, version) {
   if (!secret) return null;
   if (!token || token.indexOf('.') < 0) return null;
   const [payload, sig] = token.split('.');
@@ -89,6 +139,9 @@ async function readSession(secret, token) {
   let obj;
   try { obj = JSON.parse(dec.decode(b64uDecode(payload))); } catch { return null; }
   if (!obj || obj.a !== 1 || !obj.exp || obj.exp < Date.now()) return null;
+  // 認証バージョン不一致 = パスワードが変わった後の古いセッション。
+  // v を持たない旧形式のトークンもここで落ちる (fail-closed)。
+  if (!timingSafeEqualStr(String(obj.v || ''), String(version || ''))) return null;
   return obj;
 }
 async function csrfFor(secret, nonce) { return hmacSign(secret, 'csrf:' + nonce); }
@@ -382,7 +435,11 @@ async function createSnippet(env, { html, title, tags }) {
 
 async function requireAuth(req, env) {
   const c = parseCookies(req);
-  return readSession(env.SESSION_SECRET, c.hv_sess);
+  if (!c.hv_sess) return null; // Cookie が無ければ KV も引かない
+  const sess = await readSession(env.SESSION_SECRET, c.hv_sess, await authVersion(env));
+  if (!sess) return null;
+  if (await isRevoked(env, sess.n)) return null; // ログアウト済み
+  return sess;
 }
 async function csrfOk(req, sess, env) {
   const token = req.headers.get('x-csrf-token');
@@ -623,7 +680,7 @@ export default {
           await env.VAULT.put(rlKey, String(cnt + 1), { expirationTtl: 15 * 60 });
           return json({ error: 'Wrong password.' }, 401);
         }
-        const s = await makeSession(env.SESSION_SECRET);
+        const s = await makeSession(env.SESSION_SECRET, await authVersion(env));
         return json(
           { ok: true, csrf: await csrfFor(env.SESSION_SECRET, s.nonce) },
           200,
@@ -636,7 +693,21 @@ export default {
         if (!sess) return json({ error: 'Unauthorized.' }, 401);
         // 状態変更(Cookie失効)なので他の変更系APIと同じくCSRFトークンを要求する
         if (!(await csrfOk(req, sess, env))) return json({ error: 'Invalid CSRF token.' }, 403);
-        return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', 0, secure) });
+        // Cookie を消すだけでは複製されたトークンが期限まで通る。
+        // サーバー側の失効リストにも載せてから返す。
+        const revoked = await revokeSession(env, sess);
+        // このブラウザの Cookie は成否によらず消す (最低限そこは確実にログアウトする)。
+        const clear = { 'Set-Cookie': sessionCookie('', 0, secure) };
+        // 失効を書けなかったら 200 を返さない。200 は「このトークンはもう通らない」
+        // という約束であり、書けていない以上その約束が守れていない。
+        if (!revoked) {
+          return json(
+            { error: 'Logged out in this browser, but the session could not be revoked server-side. Rotate SESSION_SECRET if the cookie may have been copied.' },
+            500,
+            clear
+          );
+        }
+        return json({ ok: true }, 200, clear);
       }
 
       // ---- 一覧 ----
