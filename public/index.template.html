@@ -576,17 +576,25 @@ function showBodyResults(payload){
   renderList();
 }
 
+// 進行中の本文検索を無効化する。発行番号を進めてから打ち切るので、
+// 「打ち切りが間に合わずに届いた応答」も seq 比較で捨てられる。
+// 入力のたびに即座に呼ぶこと — デバウンス後の runBodySearch まで遅らせると、
+// その隙間に古い応答が届いてローカル絞り込みの表示を上書きしてしまう。
+function invalidateBodySearch(){
+  const seq = ++searchSeq;
+  if(searchAbort) searchAbort.abort();
+  searchAbort = null;
+  return seq;
+}
+
 // 本文検索 (サーバー)。タイトル/タグ側は applyLocalFilter が既に描画済み。
 async function runBodySearch(){
   const q = $('search').value.trim();
   SEARCH_Q = q;
-  // 前の検索がまだ飛んでいたら打ち切る (サーバ側の無駄な全走査も止まる)。
-  // 発行番号は必ず進める — 2文字未満で抜ける場合も進めないと、AbortController が
-  // 無い環境で「遅れて届いた古い応答」が現在の表示を上書きしてしまう。
-  const seq = ++searchSeq;
-  if(searchAbort) searchAbort.abort();
-  searchAbort = null;
-  if(q.length < 2){ setSearchStatus(''); return; } // 1文字はローカル絞り込みのみ
+  const seq = invalidateBodySearch();
+  // 1文字以下はローカル絞り込みのみ。ここでローカル結果を引き直しておく
+  // (直前の表示が古い本文検索の結果だった場合に、現在のクエリへ確定させる)。
+  if(q.length < 2){ setSearchStatus(''); applyLocalFilter(q); return; }
   const memo = searchMemo.get(q);
   if(memo){ showBodyResults(memo); return; }
   const ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -595,7 +603,8 @@ async function runBodySearch(){
   try{
     const r = await api('GET','/api/search?q='+encodeURIComponent(q), null, false, ctl && ctl.signal);
     // 応答が前後しても、最後に発行した検索の結果だけを採用する。
-    if(seq !== searchSeq) return;
+    // 検索欄の現在値とも突き合わせる (seq の更新漏れが起きても表示は守られる)。
+    if(seq !== searchSeq || $('search').value.trim() !== q) return;
     CSRF = r.csrf || CSRF;
     const payload = { results: r.results || [], truncated: !!r.truncated, scanned: r.scanned || 0 };
     memoPut(q, payload);
@@ -617,6 +626,9 @@ async function runSearch(){
 }
 function onSearchInput(){
   perfMark('hv:search:input');
+  // 入力した瞬間に、飛んでいる本文検索を無効化する。デバウンス後まで待つと、
+  // その間に届いた古い応答が新しいローカル絞り込みを上書きする。
+  invalidateBodySearch();
   applyLocalFilter($('search').value.trim());
   perfMark('hv:search:paint');
   perfMeasure('hv:search:local', 'hv:search:input', 'hv:search:paint');
