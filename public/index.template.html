@@ -651,7 +651,8 @@ function handleKey(e){
   e.preventDefault();
   openModal(false);
 }
-document.addEventListener('keydown', handleKey);// 検索: q が空なら全件 (SNIPPETS) を表示。2文字以上ならサーバーで本文も含めて検索する。
+document.addEventListener('keydown', handleKey);
+// 検索: q が空なら全件 (SNIPPETS) を表示。2文字以上ならサーバーで本文も含めて検索する。
 // 入力のたびに走らせないよう ~200ms デバウンスする。
 let searchTimer = null;
 let searchAbort = null; // 進行中の検索リクエスト
