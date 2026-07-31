@@ -11,6 +11,10 @@ services:
         # 表示言語をビルド時に選択（en/ja）。.env の APP_LANG を使う（既定 en）。
         # 言語を変えたら `docker compose up -d --build` で再ビルドが必要。
         APP_LANG: ${APP_LANG:-en}
+        # UI の「＋」（新規作成）を隠すか（0/1）。.env の UI_HIDE_NEW を使う（既定 0）。
+        # これもビルド引数。env_file の .env はランタイム env なのでビルドには届かない。
+        # 値を変えたら `docker compose up -d --build` で再ビルドが必要。
+        UI_HIDE_NEW: ${UI_HIDE_NEW:-0}
     image: html-vault:local
     container_name: html-vault
     # 左=ホスト公開ポート(.env の PORT)、右=コンテナ内の固定ポート(3000)。

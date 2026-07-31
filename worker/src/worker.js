@@ -580,10 +580,12 @@ export default {
 
       // ---- 静的フロント ----
       if (path === '/' || path === '/index.html') {
-        // DEMO_MODE のとき、UI 内のマーカー行を書き換えてフラグを伝達する
-        const html = demo
-          ? INDEX_HTML.replace('window.__HV_DEMO__ = false;', 'window.__HV_DEMO__ = true;')
-          : INDEX_HTML;
+        // DEMO_MODE / UI_HIDE_NEW のとき、UI 内のマーカー行を書き換えてフラグを伝達する。
+        // 置換は文字列の完全一致。worker/public/index.html のマーカー行は整形しないこと。
+        let html = INDEX_HTML;
+        if (demo) html = html.replace('window.__HV_DEMO__ = false;', 'window.__HV_DEMO__ = true;');
+        if (env.UI_HIDE_NEW === '1')
+          html = html.replace('window.__HV_HIDE_NEW__ = false;', 'window.__HV_HIDE_NEW__ = true;');
         return new Response(html, {
           headers: { 'Content-Type': 'text/html; charset=utf-8', ...SEC_HEADERS },
         });

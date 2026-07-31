@@ -158,8 +158,23 @@ UI とサーバメッセージはビルド時に焼き込まれます（ラン�
 | `SEARCH_CACHE_MB` | `64` | 全文検索キャッシュのメモリ上限。本文のテキスト化を1回だけ行って再利用するため、2回目以降の検索が全ファイル読み直しを避けられます。保管量がこの上限を超えるなら増やしてください。`0` で実質無効 |
 | `AUTH_PASSWORD` | 未設定 | 初回ログインのパスワード（または `setpass.js`）。`auth.json` 生成までのみ使用 |
 | `APP_LANG` | `en` | UI/メッセージ言語（`en`/`ja`）。ビルド時に適用 |
+| `UI_HIDE_NEW` | `0` | `1` で UI の ＋（新規作成）ボタンを隠す。MCP 中心運用向け。**ビルド時**に適用（下記参照） |
 | `API_TOKEN` | 未設定（無効） | ヘッドレスAPI用の Bearer トークン（`POST`/`GET /api/snippets`）。[stdio MCPサーバ](#mcp-連携ヘッドレスアップロード)を有効化 |
 | `MCP_SECRET_PATH` | 未設定（無効） | claude.ai 等のリモート MCP コネクター用。`/mcp/<MCP_SECRET_PATH>` を有効化（未設定なら 404）。生成例: `openssl rand -hex 24` |
+
+### ＋ボタンを隠す（`UI_HIDE_NEW`・ビルド時）
+
+保存を [MCP](#mcp-連携ヘッドレスアップロード) 経由で行っていて、ブラウザ UI は閲覧中心にしたい場合は `UI_HIDE_NEW=1` でビルドします。＋ボタンが消えます（要素は DOM に残し CSS で隠すだけ）。隠しても `n` キーで新規作成モーダルを開けます（`Escape` で閉じる）。書き込み API を塞ぐわけでは**ありません** — アクセス制御ではなく表示の設定です。
+
+- **Docker**: `.env` に `UI_HIDE_NEW=1` を書いて `docker compose up -d --build`（または `docker compose build --build-arg UI_HIDE_NEW=1`）
+- **Node**: `UI_HIDE_NEW=1 npm start`（または `UI_HIDE_NEW=1 npm run build:i18n`）
+- **Workers**: `worker/wrangler.toml` の `[vars]` に `UI_HIDE_NEW = "1"` を書いてデプロイ（こちらはランタイム変数）
+
+`APP_LANG` と同じくビルド時に `public/index.html` へ焼き込むため、自己ホスト版では**ランタイムの環境変数に設定しても効きません**。
+
+- **公開イメージ** `ghcr.io/uzuradev/html-vault` — 既定値（`0`）でビルド済み。自前ビルドが必要
+- **Fly.io の `fly.toml` `[env]`** / **Render の `render.yaml` `envVars`** — いずれもランタイム env。ビルド引数として渡してください（Fly: `fly deploy --build-arg UI_HIDE_NEW=1`）
+- **systemd の `Environment=`（[deploy/html-vault.service](deploy/html-vault.service)）** — `ExecStart` が `node server.js` を直接叩くので `build:i18n` を通りません。デプロイ時に `UI_HIDE_NEW=1 npm run build:i18n` を実行してください
 
 ### デプロイ
 

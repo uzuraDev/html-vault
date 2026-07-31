@@ -158,8 +158,23 @@ Strings live in [`locales/`](locales). Add a language by copying a locale file a
 | `SEARCH_CACHE_MB` | `64` | Memory budget for the full-text search cache. Snippet text is parsed once and reused, so repeat searches skip re-reading every file. Raise it if your vault's total text exceeds the budget; `0` effectively disables the cache |
 | `AUTH_PASSWORD` | unset | First-login password (or run `setpass.js`). Used only until `auth.json` exists |
 | `APP_LANG` | `en` | UI/message language (`en`/`ja`), applied at build time |
+| `UI_HIDE_NEW` | `0` | `1` hides the ＋ (new snippet) button in the UI — for MCP-centric setups. Applied at **build time** (see below) |
 | `API_TOKEN` | unset (disabled) | Bearer token for headless API access (`POST`/`GET /api/snippets`). Powers the [stdio MCP server](#mcp-integration-headless-upload). |
 | `MCP_SECRET_PATH` | unset (disabled) | Enables the remote MCP endpoint `/mcp/<MCP_SECRET_PATH>` for claude.ai-style custom connectors (404 when unset). Generate with `openssl rand -hex 24`. |
+
+### Hiding the ＋ button (`UI_HIDE_NEW`, build-time)
+
+If you save snippets through [MCP](#mcp-integration-headless-upload) and want the browser UI to stay read-ish, build with `UI_HIDE_NEW=1`. The ＋ button is hidden (the element stays in the DOM, CSS-hidden); pressing `n` still opens the new-snippet modal, and `Escape` closes it. Write APIs are **not** blocked — this is a UI preference, not an access control.
+
+- **Docker**: set `UI_HIDE_NEW=1` in `.env`, then `docker compose up -d --build` (or `docker compose build --build-arg UI_HIDE_NEW=1`)
+- **Node**: `UI_HIDE_NEW=1 npm start` (or `UI_HIDE_NEW=1 npm run build:i18n`)
+- **Workers**: set `UI_HIDE_NEW = "1"` under `[vars]` in `worker/wrangler.toml` and deploy — runtime var, no rebuild concerns
+
+Like `APP_LANG`, this is baked into `public/index.html` at build time, so **setting it as a runtime environment variable does nothing** on the self-hosted edition:
+
+- **Prebuilt image** `ghcr.io/uzuradev/html-vault` — built with the default (`0`); you need your own build
+- **Fly.io `[env]` in `fly.toml`** / **Render `envVars` in `render.yaml`** — runtime env. Pass it as a build argument instead (Fly: `fly deploy --build-arg UI_HIDE_NEW=1`)
+- **systemd `Environment=` in [deploy/html-vault.service](deploy/html-vault.service)** — `ExecStart` runs `node server.js` directly and never runs `build:i18n`. Run `UI_HIDE_NEW=1 npm run build:i18n` at deploy time instead
 
 ### Deploy
 
