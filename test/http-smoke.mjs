@@ -291,6 +291,18 @@ async function phaseNormal() {
     check('unauth: POST /api/snippets -> 401', r.status, 401);
   }
   {
+    // 未認証には大きい上限を与えない。壊れた JSON を 64KB 超で送ると、パースまで
+    // 行っていれば 400 (entity.parse.failed) になる。パースの前に弾けていれば 401。
+    // = 未認証のまま 10MB をバッファ+パースさせられないことの裏取り。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"html":"' + 'x'.repeat(256 * 1024),
+    });
+    await r.text();
+    check('body-limit: unauth POST /api/snippets 256KB -> 401 (パース前に終わる)', r.status, 401);
+  }
+  {
     // 未認証で叩ける /api/login はパスワードしか運ばない。アプリ側の上限 (64KB) が
     // 効いていれば、bcrypt 比較にもレート制限カウンタにも到達せず 413 で終わる。
     // 上限が外れると 401 (パスワード不一致) になるのでこのケースが落ちる。

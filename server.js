@@ -418,15 +418,9 @@ app.use('/mcp/:secret', (req, res, next) => {
   next();
 });
 
-// 本文パーサ。スニペットHTMLを運ぶ経路だけ MAX_UPLOAD_MB を許し、それ以外
-// (認証など) は SMALL_BODY_LIMIT に落とす。
-const jsonLarge = express.json({ limit: BODY_LIMIT });
-const jsonSmall = express.json({ limit: SMALL_BODY_LIMIT });
-const formLarge = express.urlencoded({ extended: false, limit: BODY_LIMIT });
-const formSmall = express.urlencoded({ extended: false, limit: SMALL_BODY_LIMIT });
-app.use((req, res, next) => (isLargeBodyPath(req.path) ? jsonLarge : jsonSmall)(req, res, next));
-app.use((req, res, next) => (isLargeBodyPath(req.path) ? formLarge : formSmall)(req, res, next));
-
+// セッションは本文パーサより前に置く。「大きい上限を与えてよい相手か」の判定
+// (bodyLimitIsLarge) がセッションを見るため。express-session は req.body に
+// 依存しないので、この順序で挙動は変わらない。
 app.use(
   session({
     name: 'hv.sid',
@@ -443,6 +437,40 @@ app.use(
     },
   })
 );
+
+// 大きい上限 (MAX_UPLOAD_MB) を与えてよいリクエストか。
+// スニペット経路であっても、書き込み権限が無い相手には SMALL_BODY_BYTES しか
+// 読ませない。ルート側の requireWriteAuth は本文パーサの後に走るので、これが
+// 無いと未認証のまま 10MB を毎回バッファ+パースさせられる。
+// (/mcp は authless だが、秘匿パスを上のミドルウェアで照合済み。
+//  Workers 版も認証を確かめてから本文を読むので、同じ性質になる。)
+function bodyLimitIsLarge(req) {
+  if (!isLargeBodyPath(req.path)) return false;
+  if (req.path.startsWith('/mcp/')) return true;
+  return bearerOk(req) || !!(req.session && req.session.authed);
+}
+
+// 未認証のまま大きな本文を宣言してきたら、パースの前に 401 で終わらせる
+// (どのみち書き込みルートは 401 を返す。本文を読む前に返すのが要点)。
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  if (bodyLimitIsLarge(req)) return next();
+  const len = Number(req.get('content-length'));
+  if (isLargeBodyPath(req.path) && Number.isFinite(len) && len > SMALL_BODY_BYTES) {
+    return res.status(401).json({ error: STR.unauthorized });
+  }
+  next();
+});
+
+// 本文パーサ。スニペットHTMLを運ぶ経路 (かつ書き込み権限あり) だけ MAX_UPLOAD_MB を
+// 許し、それ以外 (認証など) は SMALL_BODY_LIMIT に落とす。
+// Content-Length を宣言しない (chunked) 場合はここが上限として効く。
+const jsonLarge = express.json({ limit: BODY_LIMIT });
+const jsonSmall = express.json({ limit: SMALL_BODY_LIMIT });
+const formLarge = express.urlencoded({ extended: false, limit: BODY_LIMIT });
+const formSmall = express.urlencoded({ extended: false, limit: SMALL_BODY_LIMIT });
+app.use((req, res, next) => (bodyLimitIsLarge(req) ? jsonLarge : jsonSmall)(req, res, next));
+app.use((req, res, next) => (bodyLimitIsLarge(req) ? formLarge : formSmall)(req, res, next));
 
 // ログイン試行レート制限 (総当たり対策)
 const loginLimiter = rateLimit({
