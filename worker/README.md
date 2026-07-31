@@ -66,10 +66,18 @@ node -e "const p=require('./package-lock.json').packages;for(const k of ['node_m
 ```
 
 A **prerelease** (`-alpha` / `-beta` / `-rc`) there can break local development and the
-smoke test, and no audit finding justifies taking one. As of wrangler 4.116.0 both are
-stable (`miniflare 4.x`, `workerd 1.x`); wrangler 4.117.0 moves `miniflare` to a
-`5.x-alpha`. Deeper in the tree `unenv` and `youch` are already pinned to prereleases by
-wrangler itself — those are upstream's choice and not something to act on.
+smoke test, and no audit finding justifies taking one. **The command above is the source
+of truth — the versions named here go stale.** At the time of writing (2026-07-31,
+wrangler 4.116.0) both were stable (`miniflare 4.x`, `workerd 1.x`), and wrangler 4.117.0
+moved `miniflare` to a `5.x-alpha`; that is the shape of the problem, not a standing fact.
+Check the tree yourself before deciding on a bump:
+
+```sh
+npm view wrangler@<version> dependencies   # what the candidate pulls in
+```
+
+Deeper in the tree `unenv` and `youch` are already pinned to prereleases by wrangler
+itself — those are upstream's choice and not something to act on.
 
 After taking a bump, run the smoke test and a build before merging:
 
