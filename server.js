@@ -51,6 +51,46 @@ const MAX_UPLOAD_MB =
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 const BODY_LIMIT = `${MAX_UPLOAD_MB}mb`;
 
+// ---- リクエスト本文のサイズ上限 ------------------------------------------
+// スニペット本体を運ぶ経路以外は、数十KBもあれば足りる。全経路に MAX_UPLOAD_MB を
+// 許すと、未認証のまま (例: /api/login) 10MB のボディを読み込ませられてしまう。
+// 経路を2段に分け、パーサへ渡す前に Content-Length で弾く。
+const SMALL_BODY_BYTES = 64 * 1024;
+const SMALL_BODY_LIMIT = `${SMALL_BODY_BYTES}b`;
+// Content-Length の早期検査に使う外枠。厳密な「HTML が MAX_UPLOAD_BYTES 以内か」の
+// 判定は従来どおりパーサと createSnippet 側が行い、ここは読み込むバイト数の上限。
+//
+// 外枠は Content-Type で変わる。multipart は境界行ぶんの数百バイトしか増えないが、
+// JSON は本文が文字列としてエスケープされるぶん膨らむ:
+//   " と \ が2バイトになる (最悪ケース: 全文が引用符の HTML → ちょうど2倍)
+//   改行・タブは \n \t の2バイト、非ASCII は UTF-8 のまま素通り
+// つまり「10MB以内の HTML」を包む外枠として MAX_UPLOAD_BYTES + 少しでは足りず、
+// 正当なアップロードを 413 にしてしまう。JSON 経路だけ2倍側の外枠を使う。
+//
+// 2倍で足りるのは、htmlContractError() が「Tab/LF/CR 以外の C0 制御文字」を保存対象から
+// 排除しているから。それらは JSON で6バイトのエスケープ表記へ展開され、2倍の見積りを
+// 壊す。契約と外枠は必ずセットで直すこと (片方だけ緩めると、保存できるのに外枠で
+// 弾かれる本文が生まれる)。
+const REQUEST_HEADROOM_BYTES = 256 * 1024;
+const MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + REQUEST_HEADROOM_BYTES;
+const MAX_JSON_REQUEST_BYTES = MAX_UPLOAD_BYTES * 2 + REQUEST_HEADROOM_BYTES;
+// body-parser 側の上限も同じ根拠で JSON だけ広げる。ここを BODY_LIMIT のままに
+// すると、Content-Length の検査を通ったあとパーサが entity.too.large で弾く。
+const JSON_BODY_LIMIT = `${MAX_JSON_REQUEST_BYTES}b`;
+
+// スニペットHTMLが載りうる経路 (= 大きい上限を許す経路)。
+// /api/snippets 配下と /mcp/<secret> (upload_html) だけ。それ以外は小さい上限で足りる。
+function isLargeBodyPath(p) {
+  return p === '/api/snippets' || p.startsWith('/api/snippets/') || p.startsWith('/mcp/');
+}
+function isJsonRequest(req) {
+  return (req.get('content-type') || '').includes('json');
+}
+function requestLimitFor(req) {
+  if (!isLargeBodyPath(req.path)) return SMALL_BODY_BYTES;
+  return isJsonRequest(req) ? MAX_JSON_REQUEST_BYTES : MAX_REQUEST_BYTES;
+}
+
 // HTTPSの背後 (リバースプロキシ) で動かすなら true を推奨
 const BEHIND_HTTPS = process.env.BEHIND_HTTPS === '1';
 
@@ -373,9 +413,32 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: BODY_LIMIT }));
-app.use(express.urlencoded({ extended: false, limit: BODY_LIMIT }));
+// ---- 本文サイズのガード (パーサより前) -----------------------------------
+// 本文を1バイトも読む前に Content-Length を見て弾く。body-parser の limit も同じ
+// 検査をするが、効くのは JSON/urlencoded を実際にパースする経路だけで、multipart
+// (multer) や Content-Type 不明の POST は素通りする。ここで全経路に上限を課す。
+// Content-Length が無い (chunked) 場合は、下のパーサと multer のストリーミング上限が
+// 受け持つ (どちらも上限に達した時点で読み込みを止める)。
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  const len = Number(req.get('content-length'));
+  if (Number.isFinite(len) && len > requestLimitFor(req)) {
+    return res.status(413).json({ error: STR.bodyTooLarge });
+  }
+  next();
+});
 
+// /mcp は authless (秘匿パスがゲート) なので、秘匿パスの照合を本文パースより前に
+// 済ませる。こうしないと、パスを知らない相手でも毎回 10MB の JSON を読ませられる。
+// 各ルート側の mcpSecretOk() はそのまま残す (多重防御)。
+app.use('/mcp/:secret', (req, res, next) => {
+  if (!mcpSecretOk(req.params.secret)) return res.status(404).json({ error: STR.notFound });
+  next();
+});
+
+// セッションは本文パーサより前に置く。「大きい上限を与えてよい相手か」の判定
+// (bodyLimitIsLarge) がセッションを見るため。express-session は req.body に
+// 依存しないので、この順序で挙動は変わらない。
 app.use(
   session({
     name: 'hv.sid',
@@ -392,6 +455,40 @@ app.use(
     },
   })
 );
+
+// 大きい上限 (MAX_UPLOAD_MB) を与えてよいリクエストか。
+// スニペット経路であっても、書き込み権限が無い相手には SMALL_BODY_BYTES しか
+// 読ませない。ルート側の requireWriteAuth は本文パーサの後に走るので、これが
+// 無いと未認証のまま 10MB を毎回バッファ+パースさせられる。
+// (/mcp は authless だが、秘匿パスを上のミドルウェアで照合済み。
+//  Workers 版も認証を確かめてから本文を読むので、同じ性質になる。)
+function bodyLimitIsLarge(req) {
+  if (!isLargeBodyPath(req.path)) return false;
+  if (req.path.startsWith('/mcp/')) return true;
+  return bearerOk(req) || !!(req.session && req.session.authed);
+}
+
+// 未認証のまま大きな本文を宣言してきたら、パースの前に 401 で終わらせる
+// (どのみち書き込みルートは 401 を返す。本文を読む前に返すのが要点)。
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  if (bodyLimitIsLarge(req)) return next();
+  const len = Number(req.get('content-length'));
+  if (isLargeBodyPath(req.path) && Number.isFinite(len) && len > SMALL_BODY_BYTES) {
+    return res.status(401).json({ error: STR.unauthorized });
+  }
+  next();
+});
+
+// 本文パーサ。スニペットHTMLを運ぶ経路 (かつ書き込み権限あり) だけ MAX_UPLOAD_MB を
+// 許し、それ以外 (認証など) は SMALL_BODY_LIMIT に落とす。
+// Content-Length を宣言しない (chunked) 場合はここが上限として効く。
+const jsonLarge = express.json({ limit: JSON_BODY_LIMIT });
+const jsonSmall = express.json({ limit: SMALL_BODY_LIMIT });
+const formLarge = express.urlencoded({ extended: false, limit: BODY_LIMIT });
+const formSmall = express.urlencoded({ extended: false, limit: SMALL_BODY_LIMIT });
+app.use((req, res, next) => (bodyLimitIsLarge(req) ? jsonLarge : jsonSmall)(req, res, next));
+app.use((req, res, next) => (bodyLimitIsLarge(req) ? formLarge : formSmall)(req, res, next));
 
 // ログイン試行レート制限 (総当たり対策)
 const loginLimiter = rateLimit({
@@ -537,6 +634,18 @@ function guessTitle(html) {
   return 'Untitled';
 }
 
+// 保存する HTML の入力契約。
+// Tab / LF / CR 以外の C0 制御文字を拒否する。理由は2つある:
+//   1. HTML として不正 (HTML Standard では NUL や C1 を含む制御文字はパースエラー)
+//   2. JSON にすると 1 バイトが \u00XX の 6 バイトへ膨らみ、リクエスト本文の外枠
+//      (MAX_JSON_REQUEST_BYTES = 保存上限の2倍) の見積りを壊す
+// この契約があるおかげで、JSON エスケープの膨張は " と \ と改行類の 2 倍で頭打ちになり、
+// 「保存できる本文なら必ず外枠に収まる」が成り立つ (外枠が正当な保存を拒まない)。
+const FORBIDDEN_CTRL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+function htmlContractError(body) {
+  return FORBIDDEN_CTRL_RE.test(body) ? STR.controlChars : null;
+}
+
 // スニペット作成の共通処理。/api/snippets(POST) と /mcp(upload_html) の両方から呼ぶ。
 // 成功で { meta } を、入力不正で { error, status } を返す。
 function createSnippet({ html, title, tags }) {
@@ -545,6 +654,8 @@ function createSnippet({ html, title, tags }) {
   if (Buffer.byteLength(body, 'utf8') > MAX_UPLOAD_BYTES) {
     return { error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB), status: 413 };
   }
+  const contractError = htmlContractError(body);
+  if (contractError) return { error: contractError, status: 400 };
   const id = newId();
   fs.writeFileSync(snippetPath(id), body, 'utf8');
   const now = Date.now();
@@ -889,9 +1000,14 @@ app.put('/api/snippets/:id', requireAuth, checkCsrf, (req, res) => {
   if (typeof req.body.html === 'string') {
     const file = snippetPath(req.params.id);
     if (!file) return res.status(400).json({ error: STR.invalidId });
-    if (req.body.html.length > MAX_UPLOAD_BYTES) {
+    // 上限はバイト数で見る。String#length は UTF-16 のコード単位数なので、
+    // 日本語のようなマルチバイト文字だと実バイト数の 1/3 程度になり、上限を
+    // 大きく超える本文が通ってしまう (下の meta.bytes と基準がずれる)。
+    if (Buffer.byteLength(req.body.html, 'utf8') > MAX_UPLOAD_BYTES) {
       return res.status(413).json({ error: STR.tooLarge.replace('{mb}', MAX_UPLOAD_MB) });
     }
+    const contractError = htmlContractError(req.body.html);
+    if (contractError) return res.status(400).json({ error: contractError });
     fs.writeFileSync(file, req.body.html, 'utf8');
     // 本文が変わったら検索用テキストのキャッシュを捨てる。
     // (stat 検証もあるが、mtime の分解能が粗い環境で「同一秒・同一サイズ」の
@@ -1083,7 +1199,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // multerなどのエラーハンドラ
 app.use((err, req, res, next) => {
-  if (err) return res.status(400).json({ error: err.message || STR.genericError });
+  if (err) {
+    // 本文サイズ超過は 413 で返す (body-parser の entity.too.large / multer の
+    // LIMIT_FILE_SIZE)。内部のエラーメッセージをそのまま出さず定型文にする。
+    if (err.type === 'entity.too.large' || err.status === 413 || err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: STR.bodyTooLarge });
+    }
+    return res.status(400).json({ error: err.message || STR.genericError });
+  }
   next();
 });
 

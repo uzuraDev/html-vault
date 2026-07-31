@@ -20,6 +20,27 @@
 import INDEX_HTML from '../public/index.html';
 
 const MAX_BYTES = 10 * 1024 * 1024;
+// ---- リクエスト本文のサイズ上限 ------------------------------------------
+// MAX_BYTES は「保存するHTMLの上限」。こちらは「読み込むリクエスト本文の上限」で、
+// 本体が 10MB を超えていないかの判定は従来どおり createSnippet / PUT 側が行う。
+//
+// 外枠は Content-Type で変わる。multipart は境界行ぶんの数百バイトしか増えないが、
+// JSON は本文が文字列としてエスケープされるぶん膨らむ:
+//   " と \ が2バイトになる (最悪ケース: 全文が引用符の HTML → ちょうど2倍)
+//   改行・タブは \n \t の2バイト、非ASCII は UTF-8 のまま素通り
+// つまり「10MB以内の HTML」を包む外枠として MAX_BYTES + 少しでは足りず、正当な
+// アップロードを 413 にしてしまう。JSON 経路だけ2倍側の外枠を使う。
+//
+// 2倍で足りるのは、htmlContractError() が「Tab/LF/CR 以外の C0 制御文字」を保存対象から
+// 排除しているから。それらは JSON で6バイトのエスケープ表記へ展開され、2倍の見積りを
+// 壊す。契約と外枠は必ずセットで直すこと (片方だけ緩めると、保存できるのに外枠で
+// 弾かれる本文が生まれる)。
+const REQUEST_HEADROOM_BYTES = 256 * 1024;
+const MAX_REQUEST_BYTES = MAX_BYTES + REQUEST_HEADROOM_BYTES;
+const MAX_JSON_REQUEST_BYTES = MAX_BYTES * 2 + REQUEST_HEADROOM_BYTES;
+// パスワードのような小さな JSON しか運ばない経路 (= 未認証で叩ける経路) の上限。
+const SMALL_BODY_BYTES = 64 * 1024;
+const TOO_LARGE_MSG = 'Request body is too large.';
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8時間
 const DEMO_ERROR_MSG =
   'Read-only demo. Deploy your own vault: https://github.com/uzuraDev/html-vault';
@@ -179,6 +200,77 @@ function json(obj, status, extra) {
     status: status || 200,
     headers: { 'Content-Type': 'application/json; charset=utf-8', ...SEC_HEADERS, ...(extra || {}) },
   });
+}
+
+function tooLargeJson() { return json({ error: TOO_LARGE_MSG }, 413); }
+
+// ---- リクエスト本文の読み取り (上限つき) ----------------------------------
+// Workers の req.json() / req.formData() には上限が無く、本文が届くだけ読み込む。
+// 未認証で叩ける経路 (/api/login や /mcp) でもそれは同じなので、経路ごとの上限を
+// アプリ側で課す。まず Content-Length だけで弾き、宣言が無い (chunked) 場合は
+// ストリームを数えながら読んで、超えた時点で打ち切る。
+function declaredTooLarge(req, maxBytes) {
+  const n = Number(req.headers.get('content-length'));
+  return Number.isFinite(n) && n > maxBytes;
+}
+
+// 上限つきで本文を読む。{ ok: true, bytes } / { ok: false } (上限超過)。
+async function readBodyBytes(req, maxBytes) {
+  if (declaredTooLarge(req, maxBytes)) return { ok: false };
+  if (!req.body) return { ok: true, bytes: new Uint8Array(0) };
+  const reader = req.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      // 残りは読まずに捨てる (以降のバイトをメモリに載せない)
+      try { await reader.cancel(); } catch { /* 既に閉じていれば無視 */ }
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { bytes.set(c, off); off += c.byteLength; }
+  return { ok: true, bytes };
+}
+
+// 上限つきで JSON を読む。{ value } / { tooLarge: true } / { parseError: true }。
+async function readJsonLimited(req, maxBytes) {
+  const r = await readBodyBytes(req, maxBytes);
+  if (!r.ok) return { tooLarge: true };
+  if (r.bytes.length === 0) return { parseError: true };
+  try {
+    const v = JSON.parse(dec.decode(r.bytes));
+    return { value: v };
+  } catch {
+    return { parseError: true };
+  }
+}
+
+// 上限つきで JSON オブジェクトを読む。壊れていれば {} に倒す
+// (従来の `await req.json().catch(() => ({}))` と同じ扱い)。上限超過だけは区別する。
+async function readJsonObject(req, maxBytes) {
+  const r = await readJsonLimited(req, maxBytes);
+  if (r.tooLarge) return { tooLarge: true };
+  const v = r.value;
+  return { value: v && typeof v === 'object' && !Array.isArray(v) ? v : {} };
+}
+
+// 保存する HTML の入力契約。
+// Tab / LF / CR 以外の C0 制御文字を拒否する。理由は2つある:
+//   1. HTML として不正 (HTML Standard では NUL などの制御文字はパースエラー)
+//   2. JSON にすると 1 バイトが \u00XX の 6 バイトへ膨らみ、リクエスト本文の外枠
+//      (MAX_JSON_REQUEST_BYTES = 保存上限の2倍) の見積りを壊す
+// この契約があるおかげで、JSON エスケープの膨張は " と \\ と改行類の 2 倍で頭打ちになり、
+// 「保存できる本文なら必ず外枠に収まる」が成り立つ (外枠が正当な保存を拒まない)。
+const FORBIDDEN_CTRL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
+function htmlContractError(body) {
+  return FORBIDDEN_CTRL_RE.test(body) ? 'Contains control characters that are not valid in HTML.' : null;
 }
 
 // ---- utils ----
@@ -420,6 +512,8 @@ async function createSnippet(env, { html, title, tags }) {
   const body = typeof html === 'string' ? html : '';
   if (!body.trim()) return { error: 'Content is empty.', status: 400 };
   if (byteLen(body) > MAX_BYTES) return { error: 'Exceeds the 10MB size limit.', status: 413 };
+  const contractError = htmlContractError(body);
+  if (contractError) return { error: contractError, status: 400 };
   const id = newId();
   await env.VAULT.put('snip:' + id, body);
   const now = Date.now();
@@ -575,8 +669,11 @@ async function handleMcp(req, env, origin) {
   if (req.method === 'GET') return new Response('Method Not Allowed', { status: 405, headers: SEC_HEADERS });
   if (req.method !== 'POST') return new Response(null, { status: 405, headers: SEC_HEADERS });
 
-  let body;
-  try { body = await req.json(); } catch { return json(rpcError(null, -32700, 'Parse error')); }
+  // upload_html が HTML 全体を JSON 文字列として運ぶので、外枠は JSON 側を使う。
+  const parsed = await readJsonLimited(req, MAX_JSON_REQUEST_BYTES);
+  if (parsed.tooLarge) return tooLargeJson();
+  if (parsed.parseError) return json(rpcError(null, -32700, 'Parse error'));
+  const body = parsed.value;
   const batch = Array.isArray(body);
   const msgs = batch ? body : [body];
 
@@ -599,6 +696,11 @@ export default {
     const method = req.method;
     const secure = url.protocol === 'https:';
     const demo = isDemo(env);
+
+    // ルーティングに入る前の共通ガード。どの経路にも当てはまらないほど大きな本文は
+    // ここで打ち切る (未知パス・未認証パスもまとめて塞ぐ)。ここは全経路の外枠なので
+    // いちばん広い JSON 側を使い、経路ごとの細かい上限は各ハンドラが追加で課す。
+    if (declaredTooLarge(req, MAX_JSON_REQUEST_BYTES)) return tooLargeJson();
 
     // DEMO_MODE (閲覧専用) はセッションを発行しないので SESSION_SECRET 無しでも動く
     if (!env.SESSION_SECRET && !demo) {
@@ -662,6 +764,8 @@ export default {
       }
 
       if (path === '/api/login' && method === 'POST') {
+        // 未認証で叩ける経路。KV (レート制限カウンタ) を触る前に本文サイズで弾く。
+        if (declaredTooLarge(req, SMALL_BODY_BYTES)) return tooLargeJson();
         const ip = req.headers.get('CF-Connecting-IP') || 'local';
         const rlKey = 'rl:' + ip;
         // ベストエフォートのログイン試行スロットリング。KV の read-modify-write は非アトミック
@@ -678,8 +782,9 @@ export default {
         try { auth = env.AUTH_HASH ? JSON.parse(env.AUTH_HASH) : null; } catch { auth = null; }
         if (!auth) return json({ error: 'Password is not set. Run: npm run setpass' }, 500);
 
-        let body;
-        try { body = await req.json(); } catch { body = {}; }
+        const parsed = await readJsonObject(req, SMALL_BODY_BYTES);
+        if (parsed.tooLarge) return tooLargeJson();
+        const body = parsed.value;
         const ok = await verifyPassword(String((body && body.password) || ''), auth);
         if (!ok) {
           await env.VAULT.put(rlKey, String(cnt + 1), { expirationTtl: 15 * 60 });
@@ -813,8 +918,16 @@ export default {
 
         let html = '', title = '', tags = '', fileName = '';
         const ct = req.headers.get('content-type') || '';
-        if (ct.includes('multipart/form-data')) {
-          const form = await req.formData();
+        // multipart も JSON も、まず上限つきでバイト列として受け切る。
+        // req.formData() / req.json() は上限を持たないので直接は呼ばない。
+        // 外枠は Content-Type ごと: multipart は境界行ぶんだけ、JSON はエスケープで
+        // 最大2倍に膨らむぶんを見込む (MAX_JSON_REQUEST_BYTES の定義を参照)。
+        const isMultipart = ct.includes('multipart/form-data');
+        const read = await readBodyBytes(req, isMultipart ? MAX_REQUEST_BYTES : MAX_JSON_REQUEST_BYTES);
+        if (!read.ok) return tooLargeJson();
+        if (isMultipart) {
+          // 読み終えたバイト列から multipart を解釈し直す (Response 経由が唯一の手)
+          const form = await new Response(read.bytes, { headers: { 'content-type': ct } }).formData();
           const file = form.get('file');
           if (file && typeof file.text === 'function') {
             html = await file.text();
@@ -825,7 +938,9 @@ export default {
           title = form.get('title') || '';
           tags = form.get('tags') || '';
         } else {
-          const b = await req.json().catch(() => ({}));
+          let b = {};
+          try { b = JSON.parse(dec.decode(read.bytes)); } catch { b = {}; }
+          if (!b || typeof b !== 'object') b = {};
           html = typeof b.html === 'string' ? b.html : '';
           title = b.title || '';
           tags = b.tags || '';
@@ -957,7 +1072,9 @@ export default {
         const sess = await requireAuth(req, env);
         if (!sess) return json({ error: 'Unauthorized.' }, 401);
         if (!(await csrfOk(req, sess, env))) return json({ error: 'Invalid CSRF token.' }, 403);
-        const b = await req.json().catch(() => ({}));
+        const parsed = await readJsonObject(req, MAX_REQUEST_BYTES);
+        if (parsed.tooLarge) return tooLargeJson();
+        const b = parsed.value;
         if (!Array.isArray(b.ids) || !b.ids.every((v) => typeof v === 'string' && validId(v))) {
           return json({ error: 'Invalid request.' }, 400);
         }
@@ -983,10 +1100,15 @@ export default {
         const list = await loadIndex(env);
         const meta = list.find((s) => s.id === id);
         if (!meta) return json({ error: 'Not found.' }, 404);
-        const b = await req.json().catch(() => ({}));
+        // html を JSON 文字列として運ぶ経路なので、外枠は JSON 側。
+        const parsed = await readJsonObject(req, MAX_JSON_REQUEST_BYTES);
+        if (parsed.tooLarge) return tooLargeJson();
+        const b = parsed.value;
         let contentChanged = false;
         if (typeof b.html === 'string') {
           if (byteLen(b.html) > MAX_BYTES) return json({ error: 'Exceeds the 10MB size limit.' }, 413);
+          const contractError = htmlContractError(b.html);
+          if (contractError) return json({ error: contractError }, 400);
           await env.VAULT.put('snip:' + id, b.html);
           // 本文が変わったので検索用テキストのキャッシュを捨てる。
           // (版キーの updated/bytes でも大抵は検知できるが、同一ミリ秒・同一バイト長の

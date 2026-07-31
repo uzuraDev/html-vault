@@ -291,6 +291,30 @@ async function phaseNormal() {
     check('unauth: POST /api/snippets -> 401', r.status, 401);
   }
   {
+    // 未認証には大きい上限を与えない。壊れた JSON を 64KB 超で送ると、パースまで
+    // 行っていれば 400 (entity.parse.failed) になる。パースの前に弾けていれば 401。
+    // = 未認証のまま 10MB をバッファ+パースさせられないことの裏取り。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"html":"' + 'x'.repeat(256 * 1024),
+    });
+    await r.text();
+    check('body-limit: unauth POST /api/snippets 256KB -> 401 (パース前に終わる)', r.status, 401);
+  }
+  {
+    // 未認証で叩ける /api/login はパスワードしか運ばない。アプリ側の上限 (64KB) が
+    // 効いていれば、bcrypt 比較にもレート制限カウンタにも到達せず 413 で終わる。
+    // 上限が外れると 401 (パスワード不一致) になるのでこのケースが落ちる。
+    const r = await req('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'a'.repeat(128 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: unauth POST /api/login 128KB -> 413', r.status, 413);
+  }
+  {
     const r = await req('/api/me');
     const b = await r.json().catch(() => ({}));
     record(
@@ -678,6 +702,193 @@ async function phaseNormal() {
     if (b.snippet && b.snippet.id) {
       await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
     }
+  }
+
+  // --- 本文サイズ上限 (スニペット経路は大きい上限、ただし無制限ではない) ---
+  {
+    // 64KB を超えても、スニペットを運ぶ経路なら通ること
+    // (認証経路と同じ小さい上限を全体に当ててしまう実装を弾く)。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'BigButAllowed', html: '<p>' + 'b'.repeat(256 * 1024) + '</p>' }),
+    });
+    const b = await r.json().catch(() => ({}));
+    check('body-limit: 256KB のスニペット作成は通る', r.status, 200);
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
+    // 保存上限 (10MB) を超える HTML は 413。'x' はエスケープされないので JSON の
+    // 外枠は通り、ハンドラの byteLength 検査で弾かれる経路。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'TooBigToStore', html: 'x'.repeat(11 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 11MB のスニペット作成 -> 413', r.status, 413);
+  }
+  {
+    // 外枠 (MAX_UPLOAD_BYTES*2 + 余裕分) すら超える本文は、Content-Length を見て
+    // パースの前に弾く。ハンドラまで届かない。
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'WayTooBig', html: 'x'.repeat(21 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 21MB のスニペット作成 -> 413 (パース前)', r.status, 413);
+  }
+  {
+    // 回帰: JSON は本文をエスケープするので、リクエスト全体は HTML より大きくなる。
+    // 引用符だけの HTML はちょうど2倍 (6MiB -> 12MiB超) に膨らむが、保存されるのは
+    // 6MiB で上限内。外枠を MAX_UPLOAD_BYTES + 少し にしていると、この正当な
+    // アップロードを 413 にしてしまう (PR #55 の指摘)。
+    const quoted = '"'.repeat(6 * 1024 * 1024);
+    const body = JSON.stringify({ title: 'QuoteHeavy', html: quoted });
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body,
+    });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'body-limit: JSON エスケープで2倍に膨らむ 6MiB の HTML は通る',
+      r.status === 200 && Buffer.byteLength(body) > 10 * 1024 * 1024 + 256 * 1024,
+      `200 かつ リクエスト本文 > 10MiB+256KiB (実際 ${Buffer.byteLength(body)} バイト)`,
+      `status=${r.status} bodyBytes=${Buffer.byteLength(body)}`
+    );
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
+    // 保存する HTML の入力契約: Tab/LF/CR 以外の C0 制御文字は受け付けない。
+    // 体裁の問題ではなく、JSON の外枠 (保存上限の2倍) が成り立つための前提。
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'CtrlChars', html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: 制御文字を含む本文の作成 -> 400', r.status, 400);
+  }
+  {
+    // 制御文字は JSON で6バイトのエスケープ表記へ展開されるので、4MiB の本文が
+    // 25MB のリクエストになる。契約で禁じている本文なので、外枠 (2倍) を超えた
+    // 時点でパース前に落として構わない。保存できる本文が外枠で拒まれることは無い。
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'NullHeavy', html: NUL.repeat(4 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('contract: 4MiB の制御文字本文 -> 413 (外枠で拒否)', r.status, 413);
+  }
+  {
+    // 更新経路にも同じ契約をかける (作成だけ塞いでも意味がない)。
+    const NUL = String.fromCharCode(0);
+    const c = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'CtrlUpdateTarget', html: '<p>ok</p>' }),
+    });
+    const cb = await c.json().catch(() => ({}));
+    const id = cb.snippet && cb.snippet.id;
+    const r = await req('/api/snippets/' + id, {
+      method: 'PUT',
+      headers: jsonCsrf,
+      body: JSON.stringify({ html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: 制御文字を含む本文への更新 -> 400', r.status, 400);
+    if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
+  }
+  {
+    // マルチバイト境界。String#length は UTF-16 のコード単位数なので、'あ' は
+    // 1文字=3バイト。length で上限判定していると、10MiB 制限のところへ 12MiB の
+    // 本文が通ってしまう (PR #55 で指摘された更新経路の穴)。作成・更新の両方を見る。
+    const KANA = 'あ';
+    const overText = KANA.repeat(4 * 1024 * 1024);  // 12,582,912 バイト / length 4,194,304
+    const underText = KANA.repeat(3 * 1024 * 1024); // 9,437,184 バイト / length 3,145,728
+
+    // 作成: バイト数で超えているので 413
+    {
+      const r = await req('/api/snippets', {
+        method: 'POST',
+        headers: jsonCsrf,
+        body: JSON.stringify({ title: 'MultibyteOverCreate', html: overText }),
+      });
+      await r.text();
+      check('multibyte: 12MiB 相当 (length は上限以下) の作成 -> 413', r.status, 413);
+    }
+
+    // 更新の土台を作る
+    const c = await req('/api/snippets', {
+      method: 'POST',
+      headers: jsonCsrf,
+      body: JSON.stringify({ title: 'MultibyteTarget', html: '<p>ok</p>' }),
+    });
+    const cb = await c.json().catch(() => ({}));
+    const id = cb.snippet && cb.snippet.id;
+
+    // 更新: バイト数で超えているので 413
+    {
+      const r = await req('/api/snippets/' + id, {
+        method: 'PUT',
+        headers: jsonCsrf,
+        body: JSON.stringify({ html: overText }),
+      });
+      await r.text();
+      check('multibyte: 12MiB 相当 (length は上限以下) への更新 -> 413', r.status, 413);
+    }
+
+    // 更新: 上限以下なら通り、記録されるバイト数も UTF-8 の実バイト数であること
+    {
+      const r = await req('/api/snippets/' + id, {
+        method: 'PUT',
+        headers: jsonCsrf,
+        body: JSON.stringify({ title: 'MultibyteUnder', html: underText }),
+      });
+      await r.text();
+      check('multibyte: 9MiB 相当への更新 -> 200', r.status, 200);
+      const list = await req('/api/snippets', { headers: authH });
+      const lb = await list.json().catch(() => ({}));
+      const meta = (lb.snippets || []).find((x) => x.id === id);
+      record(
+        'multibyte: 記録されるバイト数が UTF-8 の実バイト数',
+        !!meta && meta.bytes === Buffer.byteLength(underText, 'utf8'),
+        String(Buffer.byteLength(underText, 'utf8')),
+        meta ? String(meta.bytes) : '(見つからない)'
+      );
+    }
+
+    if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
+  }
+  {
+    // 413 で弾かれた作成が保存されていないことの裏取り。
+    const r = await req('/api/snippets', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    const titles = (b.snippets || []).map((s) => s.title);
+    record(
+      'body-limit: 413 になった作成が一覧に残っていない',
+      !titles.includes('TooBigToStore') &&
+        !titles.includes('WayTooBig') &&
+        !titles.includes('BigButAllowed') &&
+        !titles.includes('QuoteHeavy') &&
+        !titles.includes('CtrlChars') &&
+        !titles.includes('NullHeavy') &&
+        !titles.includes('CtrlUpdateTarget') &&
+        !titles.includes('MultibyteOverCreate') &&
+        !titles.includes('MultibyteTarget') &&
+        !titles.includes('MultibyteUnder'),
+      '413 になった2件も、作成後に削除した2件も含まない',
+      titles.join(',') || '(空)'
+    );
   }
 
   // --- 静的UI ---

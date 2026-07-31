@@ -49,6 +49,7 @@
     "unauthorized": "Not authenticated.",
     "emptyContent": "Content is empty.",
     "tooLarge": "Exceeds {mb} MB.",
+    "bodyTooLarge": "Request body is too large.",
     "notFound": "Not found.",
     "invalidId": "Invalid ID.",
     "importInvalid": "Invalid import file.",
@@ -61,6 +62,7 @@
     "authInitFromEnv": "✓ Initial password set from AUTH_PASSWORD (data/auth.json).",
     "authNotSet": "ℹ No password set. Set AUTH_PASSWORD (env) or run `node setpass.js`, then restart. Login is disabled until a password is set.",
     "sessionSecretWarn": "ℹ SESSION_SECRET not set: restarts will log you out.",
-    "sessionStoreReady": "✓ Session store: data/sessions.json ({count} session(s) restored)."
+    "sessionStoreReady": "✓ Session store: data/sessions.json ({count} session(s) restored).",
+    "controlChars": "Contains control characters that are not valid in HTML."
   }
 }

@@ -209,6 +209,21 @@ async function phaseNormal() {
     check('login: wrong password -> 401', r.status, 401);
   }
 
+  // --- request body size cap on the unauthenticated login route ---
+  {
+    // /api/login only ever carries a password, so it is capped well below MAX_BYTES.
+    // Without the cap the worker would read (and PBKDF2-compare) the whole body and
+    // answer 401 instead, so this case fails if the cap is removed. Rejection happens
+    // before the rate-limit KV read, so it does not burn a login attempt.
+    const r = await req('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'a'.repeat(128 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: unauth POST /api/login 128KB -> 413', r.status, 413);
+  }
+
   // --- create a snippet (also validates create-response security headers) ---
   const createRes = await req('/api/snippets', {
     method: 'POST',
@@ -458,6 +473,125 @@ async function phaseNormal() {
       body: JSON.stringify({ ids: [] }),
     });
     check('order: without csrf -> 403', r.status, 403);
+  }
+
+  // --- request body size cap on the snippet route ---
+  {
+    // The snippet route carries HTML, so it keeps the large cap: a body well past the
+    // login cap must still be accepted (guards against applying the small cap globally).
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'BigButAllowed', html: '<p>' + 'b'.repeat(256 * 1024) + '</p>' }),
+    });
+    const b = await r.json().catch(() => ({}));
+    check('body-limit: 256KB snippet create -> 200', r.status, 200);
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
+    // Past MAX_BYTES the HTML cannot be stored. 'x' does not get escaped, so this one
+    // clears the JSON envelope and is rejected by the handler's byte-length check.
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'TooBigToStore', html: 'x'.repeat(11 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 11MB snippet create -> 413', r.status, 413);
+  }
+  {
+    // Past the JSON envelope (MAX_BYTES*2 + headroom) it is rejected on Content-Length,
+    // before a single byte of the body is read.
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'WayTooBig', html: 'x'.repeat(21 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('body-limit: 21MB snippet create -> 413 (before parsing)', r.status, 413);
+  }
+  {
+    // Regression: JSON escapes the body, so the request is larger than the HTML it
+    // carries. An all-quotes HTML doubles exactly (6MiB -> over 12MiB) while the stored
+    // HTML stays within the 10MiB cap. An envelope of MAX_BYTES + headroom turns this
+    // legitimate upload into a 413 (reported on PR #55).
+    const quoted = '"'.repeat(6 * 1024 * 1024);
+    const body = JSON.stringify({ title: 'QuoteHeavy', html: quoted });
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body,
+    });
+    const b = await r.json().catch(() => ({}));
+    record(
+      'body-limit: 6MiB of HTML that doubles under JSON escaping is accepted',
+      r.status === 200 && bodyBytes > 10 * 1024 * 1024 + 256 * 1024,
+      `200 and request body > 10MiB+256KiB (actual ${bodyBytes} bytes)`,
+      `status=${r.status} bodyBytes=${bodyBytes}`
+    );
+    if (b.snippet && b.snippet.id) {
+      await req(`/api/snippets/${b.snippet.id}`, { method: 'DELETE', headers: authCsrf });
+    }
+  }
+  {
+    // The stored-HTML contract: C0 control characters other than Tab/LF/CR are refused.
+    // This is not cosmetic — it is what makes the 2x JSON envelope sound.
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'CtrlChars', html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: control characters in the body -> 400', r.status, 400);
+  }
+  {
+    // Control characters expand to a 6-byte escape in JSON, so 4MiB of them becomes a
+    // 25MB request. The contract forbids that body anyway, so rejecting it at the
+    // envelope is fine: no storable body is ever refused by the envelope.
+    const NUL = String.fromCharCode(0);
+    const r = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'NullHeavy', html: NUL.repeat(4 * 1024 * 1024) }),
+    });
+    await r.text();
+    check('contract: 4MiB of control characters -> 413 (envelope)', r.status, 413);
+  }
+  {
+    // The update path carries the same contract (guarding create alone is pointless).
+    const NUL = String.fromCharCode(0);
+    const c = await req('/api/snippets', {
+      method: 'POST',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'CtrlUpdateTarget', html: '<p>ok</p>' }),
+    });
+    const cb = await c.json().catch(() => ({}));
+    const id = cb.snippet && cb.snippet.id;
+    const r = await req('/api/snippets/' + id, {
+      method: 'PUT',
+      headers: { ...authCsrf, 'content-type': 'application/json' },
+      body: JSON.stringify({ html: '<p>' + NUL + '</p>' }),
+    });
+    await r.text();
+    check('contract: control characters on update -> 400', r.status, 400);
+    if (id) await req('/api/snippets/' + id, { method: 'DELETE', headers: authCsrf });
+  }
+  {
+    // The rejected creates must not have been stored.
+    const r = await req('/api/snippets', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    const titles = (b.snippets || []).map((s) => s.title);
+    record(
+      'body-limit: the 413 creates are not stored',
+      !titles.includes('TooBigToStore') && !titles.includes('WayTooBig') && !titles.includes('QuoteHeavy') &&
+        !titles.includes('CtrlChars') && !titles.includes('NullHeavy') && !titles.includes('CtrlUpdateTarget'),
+      'list contains none of the rejected or cleaned-up titles',
+      titles.join(',') || '(empty)'
+    );
   }
 
   // --- logout: must revoke server-side, not just clear the client cookie ---
