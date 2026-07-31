@@ -11,6 +11,9 @@
     --danger:#ff6b6b; --ok:#43c59e; --radius:14px;
     /* スクロールバー用。--line より一段明るくして、つまみが背景に沈まないようにする */
     --scroll-thumb:#39404e; --scroll-thumb-hover:#4b5464;
+    /* サイドバー幅。ドラッグハンドルが :root 側のこの値を書き換える
+       (.sidebar に直接当てるとモバイルの width:100% に勝ってしまうため) */
+    --sb-w:340px;
     color-scheme: dark;
   }
   *{box-sizing:border-box}
@@ -51,7 +54,7 @@
   .demo-banner{padding:8px 14px;text-align:center;font-size:13px;background:#1d2735;border-bottom:1px solid var(--line);color:var(--txt)}
   .demo-banner a{color:var(--accent);text-decoration:none;font-weight:600}
   .demo-banner a:hover{text-decoration:underline}
-  body.demo #newBtn,body.demo .sidebar-foot,body.demo .del-item,body.demo .pin-item,body.demo #editBtn{display:none!important}
+  body.demo #newBtn,body.demo #menuBtn,body.demo .del-item,body.demo .pin-item,body.demo #editBtn{display:none!important}
 
   /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
   /* safe-area: viewport-fit=cover を宣言しているので、ノッチ/ホームインジケータ分を
@@ -62,17 +65,27 @@
   .icon-btn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:9px;background:transparent;border:1px solid var(--line);color:var(--muted);flex:none;transition:color .12s,border-color .12s,background .12s}
   .icon-btn:hover{color:var(--txt);border-color:var(--accent);background:var(--panel2)}
   .icon-btn svg{width:16px;height:16px;display:block}
-  /* サイドバー最下部のログアウト */
-  .sidebar-foot{padding:10px 12px;border-top:1px solid var(--line);padding-bottom:calc(10px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
-  .logout{display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-start;padding:8px 10px;background:transparent;border:1px solid transparent;color:var(--muted);border-radius:9px}
-  .logout:hover{background:var(--panel2);color:var(--txt);border-color:var(--line)}
-  .logout svg{width:16px;height:16px;flex:none}
+  #menuBtn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  /* アカウントメニュー: ログアウトのような低頻度操作は常時表示せず、押したときだけ出す */
+  .menu-wrap{position:relative;flex:none}
+  .menu{position:absolute;top:calc(100% + 6px);right:0;z-index:10;min-width:168px;
+        padding:6px;background:var(--panel2);border:1px solid var(--line);
+        border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.45)}
+  .menu-item{display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-start;
+             padding:8px 10px;background:transparent;border:1px solid transparent;
+             color:var(--muted);border-radius:9px}
+  .menu-item:hover{background:var(--panel);color:var(--txt);border-color:var(--line)}
+  .menu-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .menu-item svg{width:16px;height:16px;flex:none}
+  /* サイドバー幅のドラッグハンドル (右端に重ねる。モバイルは全幅なので出さない) */
+  .sb-resizer{position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:5}
+  .sb-resizer:hover{background:var(--accent2)}
   /* 折りたたみ時にコンテンツ左上へ出す「開く」ボタン */
   .expand-btn{position:absolute;top:10px;left:10px;z-index:6;display:none;background:var(--panel);box-shadow:0 1px 6px rgba(0,0,0,.35)}
 
   /* レイアウト */
   main{flex:1;display:flex;min-height:0}
-  .sidebar{width:300px;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+  .sidebar{width:var(--sb-w);position:relative;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--panel)}
   /* min-width:0 が無いと flex item の既定 min-width:auto でプレビューの中身に
      押し広げられ、body ごと横スクロールする */
   .content{position:relative;flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--bg)}
@@ -80,7 +93,9 @@
   /* タップ領域 40px。幅の media query では囲わない (横向きのスマホも対象にする) */
   .toolbar input{height:40px}
   #newBtn{flex:none;width:40px;height:40px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
-  .list{overflow:auto;flex:1}
+  /* ログアウトをヘッダへ移して .sidebar-foot が無くなったぶん、一覧が画面下端まで
+     伸びる。ホームインジケータに最後の行が隠れないよう safe-area を一覧側で受ける */
+  .list{overflow:auto;flex:1;padding-bottom:env(safe-area-inset-bottom)}
   /* スクロールバー: UIのトーンに合わせる。トラックは透明にして
      各要素の背景 (.list=--panel) をそのまま透かす */
   .list,.modal-body,textarea{
@@ -170,6 +185,7 @@
     .content.hidden-mobile{display:none}
     .mobile-back{display:inline-flex!important}
     #collapseBtn{display:none}  /* モバイルは master-detail で開閉するためトグル不要 */
+    .sb-resizer{display:none}   /* 全幅表示なので幅の調整もしない */
   }
   .mobile-back{display:none}
   /* デスクトップ: サイドバーの折りたたみ */
@@ -206,6 +222,12 @@
       <div class="sidebar-head">
         <h1>📁 HTML Vault</h1>
         <button class="lang-btn" id="langBtnApp" type="button"></button>
+        <div class="menu-wrap">
+          <button class="icon-btn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="accountMenu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+          <div class="menu hide" id="accountMenu" role="menu">
+            <button class="menu-item" id="logoutBtn" type="button" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
+          </div>
+        </div>
         <button class="icon-btn" id="collapseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
       </div>
       <div class="toolbar">
@@ -213,9 +235,7 @@
         <button class="primary" id="newBtn">＋</button>
       </div>
       <div class="list" id="list"></div>
-      <div class="sidebar-foot">
-        <button class="logout" id="logoutBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
-      </div>
+      <div class="sb-resizer" id="sbResizer"></div>
     </aside>
 
     <section class="content hidden-mobile" id="content">
@@ -297,6 +317,7 @@ const I18N = {
     newBtn: 'New snippet',
     editBtn: 'Edit',
     previewTitle: 'Preview',
+    accountMenu: 'Account menu',
     logout: 'Log out',
     backToList: '← List',
     emptyHint: 'Select an item from the list, or create a new one with ＋.',
@@ -338,6 +359,7 @@ const I18N = {
     newBtn: '新規作成',
     editBtn: '編集',
     previewTitle: 'プレビュー',
+    accountMenu: 'メニュー',
     logout: 'ログアウト',
     backToList: '← 一覧',
     emptyHint: '左の一覧から選択するか、＋で新規作成してください。',
@@ -395,6 +417,8 @@ function applyI18n(){
   $('newBtn').title = t('newBtn');
   $('newBtn').setAttribute('aria-label', t('newBtn')); // 表示は「＋」だけなのでSR向けの名前を付ける
   $('frame').setAttribute('title', t('previewTitle')); // iframeのアクセシブル名 (axe frame-title)
+  $('menuBtn').title = t('accountMenu');
+  $('menuBtn').setAttribute('aria-label', t('accountMenu')); // 表示は「⋯」だけなのでSR向けの名前を付ける
   $('logoutBtn').title = t('logout');
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
@@ -760,12 +784,71 @@ $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 $('logoutBtn').onclick = logout;
 $('langBtnLogin').onclick = toggleLang;
 $('langBtnApp').onclick = toggleLang;
+
+// ---- アカウントメニュー (ヘッダの「⋯」。中身はログアウトのみ) ----
+function setMenu(open){
+  $('accountMenu').classList.toggle('hide', !open);
+  $('menuBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+  if(open) $('accountMenu').querySelector('.menu-item').focus();
+}
+// stopPropagation しないと、直後に document の click が拾って開いた瞬間に閉じてしまう
+$('menuBtn').onclick = (e)=>{ e.stopPropagation(); setMenu($('accountMenu').classList.contains('hide')); };
+document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu-wrap')) setMenu(false); });
+// Tab でメニューの外へ出たら閉じる (フォーカストラップは張らない)
+$('accountMenu').addEventListener('focusout', (e)=>{
+  if(!$('accountMenu').contains(e.relatedTarget) && e.relatedTarget !== $('menuBtn')) setMenu(false);
+});
+
+// ---- キーボード操作 (document の keydown はこの1本だけ) ----
+// 上のレイヤーから順に処理して return する。ショートカットを足すときもこの構造を崩さない。
+function handleKey(e){
+  if(e.isComposing) return; // IME変換中の Enter/Escape は握らない
+  if(e.key === 'Escape'){
+    if(!$('accountMenu').classList.contains('hide')){ setMenu(false); $('menuBtn').focus(); return; }
+    if($('modal').classList.contains('show')){ closeModal(); return; }
+    return;
+  }
+}
+document.addEventListener('keydown', handleKey);
+
 // ---- サイドバーの折りたたみ/展開 (状態は localStorage に記憶) ----
 const LS_SB = 'hv:sbCollapsed';
 function setSidebarCollapsed(c){ $('appView').classList.toggle('sb-collapsed', c); lsSet(LS_SB, c ? '1' : ''); }
 $('collapseBtn').onclick = ()=>setSidebarCollapsed(true);
 $('expandBtn').onclick = ()=>setSidebarCollapsed(false);
 if(lsGet(LS_SB)==='1') setSidebarCollapsed(true);
+
+// ---- サイドバー幅のドラッグ調整 (デスクトップのみ。幅は localStorage に記憶) ----
+// 幅は必ず :root の --sb-w を書き換える。.sidebar へ直接当てると
+// @media (max-width:760px) の width:100% に勝ってモバイルが固定幅になる。
+const LS_SBW = 'hv:sbWidth';
+const SB_MIN = 240, SB_MAX = 560;
+let sbWidth = 340;
+function setSidebarWidth(px){
+  sbWidth = Math.min(SB_MAX, Math.max(SB_MIN, Math.round(px)));
+  document.documentElement.style.setProperty('--sb-w', sbWidth+'px');
+}
+(function initSidebarResize(){
+  const savedW = parseInt(lsGet(LS_SBW)||'', 10);
+  if(Number.isFinite(savedW)) setSidebarWidth(savedW);
+  const rz = $('sbResizer');
+  let resizing = false;
+  rz.addEventListener('pointerdown', (e)=>{
+    if(window.matchMedia('(max-width:760px)').matches) return;
+    resizing = true;
+    try{ rz.setPointerCapture(e.pointerId); }catch{}
+    e.preventDefault(); // ドラッグ中にテキスト選択が走らないように
+  });
+  rz.addEventListener('pointermove', (e)=>{ if(resizing) setSidebarWidth(e.clientX); });
+  const endResize = (e)=>{
+    if(!resizing) return;
+    resizing = false;
+    try{ rz.releasePointerCapture(e.pointerId); }catch{}
+    lsSet(LS_SBW, String(sbWidth));
+  };
+  rz.addEventListener('pointerup', endResize);
+  rz.addEventListener('pointercancel', endResize);
+})();
 // 検索: q が空なら全件、2文字以上ならサーバーで本文も含めて検索 (~200msデバウンス)。
 let searchTimer = null;
 let searchAbort = null; // 進行中の検索リクエスト
