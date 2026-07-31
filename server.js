@@ -652,11 +652,22 @@ function makeExcerpt(text, idx, needleLen) {
 }
 
 app.get('/api/search', requireAuthOrToken, (req, res) => {
+  const t0 = process.hrtime.bigint();
+  // 走査時間を Server-Timing で返す (DevTools の Network > Timing で
+  // 「サーバー処理」と「往復」を切り分けられるようにする)。
+  const sendTiming = () => {
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    res.set('Server-Timing', 'search;dur=' + ms.toFixed(1) + ';desc="scan"');
+  };
   const q = String((req.query && req.query.q) || '').trim();
   if (q.length < 2) {
-    // 2文字未満は検索しない (空の結果を返す。UI側は全件表示にフォールバックする)
+    // 2文字未満は検索しない (空の結果を返す。UI側はクライアント側の絞り込みだけで表示する)
+    sendTiming();
     return res.json({ results: [], q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
   }
+  // ?excerpt=0: タイトル/タグで既にヒットが確定している行の本文読み込みを省く。
+  // 既定 (未指定) は従来どおり本文も読んで抜粋を出す。件数が多い環境向けのオプトイン。
+  const wantExcerpt = String((req.query && req.query.excerpt) || '') !== '0';
   const needle = q.toLowerCase();
   const list = loadIndex();
   const hits = []; // { meta, field, excerpt }
@@ -669,9 +680,10 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
 
     // 本文はキャッシュ経由で読む (ファイル欠損は無視してメタのみで判定)。
     // タイトル/タグでヒットしていても、本文にも語があれば抜粋を出す
-    // — これは元からの挙動なので変えない。一致位置はここで1回だけ求め、
+    // — これは元からの挙動なので既定では変えない。一致位置はここで1回だけ求め、
     // 抜粋生成側では再走査しない。
-    const entry = getSearchText(meta.id);
+    const skipBody = !wantExcerpt && (inTitle || inTags);
+    const entry = skipBody ? null : getSearchText(meta.id);
     const idx = entry ? entry.lower.indexOf(needle) : -1;
 
     if (!inTitle && !inTags && idx === -1) continue;
@@ -702,6 +714,7 @@ app.get('/api/search', requireAuthOrToken, (req, res) => {
     field,
     excerpt,
   }));
+  sendTiming();
   res.json({ results, q, csrf: req.session && req.session.authed ? ensureCsrf(req) : null });
 });
 

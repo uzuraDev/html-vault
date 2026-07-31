@@ -11,6 +11,8 @@
     "pinTitle": "Pin",
     "unpinTitle": "Unpin",
     "searchPlaceholder": "Search (title / tags / body)",
+    "searching": "Searching…",
+    "searchTruncated": "Body search covered the {n} most recent items",
     "bodyBadge": "body",
     "newTitle": "New",
     "backToList": "← List",

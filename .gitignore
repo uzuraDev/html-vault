@@ -1,5 +1,7 @@
 node_modules/
 data/
+# scripts/seed-local.mjs が作る開発用データ (既定の出力先)
+data-seed/
 .env
 # 言語別に生成されるため追跡しない（locales/ + index.template.html が原本）
 public/index.html

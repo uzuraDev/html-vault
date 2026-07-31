@@ -432,6 +432,41 @@ async function phaseNormal() {
       `status=${r.status} field=${first.field} excerpt="${first.excerpt || ''}"`
     );
   }
+  {
+    // ?excerpt=0 はタイトル/タグ一致行の本文読み込みを省く (抜粋が付かなくなるだけで、件数は同じ)
+    const r = await req('/api/search?q=uniquetitlezqx&excerpt=0', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    const first = (b.results || [])[0] || {};
+    record(
+      'search: excerpt=0 -> タイトル一致行はヒットしたまま抜粋なし',
+      r.status === 200 && (b.results || []).length === 1 && first.field === 'title' && first.excerpt === '',
+      '1件・field=title・excerpt は空',
+      `status=${r.status} results=${(b.results || []).length} field=${first.field} excerpt="${first.excerpt}"`
+    );
+  }
+  {
+    // excerpt=0 でも本文のみ一致は従来どおり見つかる (本文走査を止める指定ではない)
+    const r = await req('/api/search?q=bodyneedleword42&excerpt=0', { headers: authH });
+    const b = await r.json().catch(() => ({}));
+    const first = (b.results || [])[0] || {};
+    record(
+      'search: excerpt=0 でも本文のみ一致は抜粋つきで返る',
+      r.status === 200 && first.field === 'body' && !!first.excerpt,
+      'field=body で excerpt が空でない',
+      `status=${r.status} field=${first.field} excerpt="${first.excerpt || ''}"`
+    );
+  }
+  {
+    const r = await req('/api/search?q=uniquetitlezqx', { headers: authH });
+    await r.text().catch(() => '');
+    const st = r.headers.get('server-timing') || '';
+    record(
+      'search: Server-Timing で走査時間を返す',
+      /^search;dur=\d+(\.\d+)?;desc="scan"$/.test(st),
+      'search;dur=<ms>;desc="scan"',
+      `Server-Timing="${st}"`
+    );
+  }
 
   // --- 取得系。未認証は 401、認証済みは 200 ---
   check('unauth: GET /api/snippets/:id/raw -> 401', (await req(`/api/snippets/${id}/raw`)).status, 401);

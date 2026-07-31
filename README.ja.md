@@ -161,6 +161,15 @@ UI とサーバメッセージはビルド時に焼き込まれます（ラン�
 | `API_TOKEN` | 未設定（無効） | ヘッドレスAPI用の Bearer トークン（`POST`/`GET /api/snippets`）。[stdio MCPサーバ](#mcp-連携ヘッドレスアップロード)を有効化 |
 | `MCP_SECRET_PATH` | 未設定（無効） | claude.ai 等のリモート MCP コネクター用。`/mcp/<MCP_SECRET_PATH>` を有効化（未設定なら 404）。生成例: `openssl rand -hex 24` |
 
+### 検索まわり（開発用）
+
+タイトル/タグの絞り込みはブラウザが持っているデータだけで即座に行い、サーバーへ飛ぶのは本文検索だけです（約150msデバウンス、確定したクエリごとに1回、次の打鍵で中断）。IME 変換中は確定するまでリクエストしません。
+
+- `GET /api/search?q=…&excerpt=0` — タイトル/タグで既にヒットした行の本文読み込みを省きます。件数が多い環境では速くなりますが、その行には抜粋が付きません。付けない（既定・UI もこちら）と従来どおり抜粋が出ます。
+- `/api/search` は `Server-Timing: search;dur=…` を返します。DevTools → Network → Timing でサーバーの走査時間だけを読めます。
+- UI に `?debug=perf` を付けると、入力から再描画までを `console.table` に出します。付けなければ計測コードは1行も走りません。
+- それらしい件数で試したいとき: `node scripts/seed-local.mjs 200 data-seed` で `data-seed/` に200件を作り、`DATA_DIR=data-seed npm start` で起動します。**実データの `data/` を指定しないこと** — 既存の `index.json` がある出力先には `--force` なしでは書きません。
+
 ### デプロイ
 
 - **VPS / 自宅 / Raspberry Pi**: `docker compose up -d`。公開時は HTTPS 必須（セキュリティ参照）。詳細: [deploy/DEPLOY.ja.md](deploy/DEPLOY.ja.md)。Cloudflare Tunnel: [deploy/CLOUDFLARE.ja.md](deploy/CLOUDFLARE.ja.md)。

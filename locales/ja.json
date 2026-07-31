@@ -11,6 +11,8 @@
     "pinTitle": "ピン留め",
     "unpinTitle": "ピン留めを解除",
     "searchPlaceholder": "検索 (タイトル/タグ/本文)",
+    "searching": "検索中…",
+    "searchTruncated": "本文検索は新しい {n} 件のみ対象です",
     "bodyBadge": "本文",
     "newTitle": "新規",
     "backToList": "← 一覧",
