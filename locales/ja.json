@@ -15,6 +15,7 @@
     "searching": "検索中…",
     "searchTruncated": "本文検索は新しい {n} 件のみ対象です",
     "bodyBadge": "本文",
+    "detailBar": "選択中のスニペットの詳細",
     "newTitle": "新規作成",
     "backToList": "← 一覧",
     "emptyState": "左の一覧から選択するか、⋯ メニューから新規作成してください。",
