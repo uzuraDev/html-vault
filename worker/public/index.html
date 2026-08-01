@@ -730,8 +730,13 @@ function pruneTagFilter(){
 function allTags(){
   const m = new Map(); // key(小文字) -> { label, n }
   for(const s of SNIPPETS){
+    // 件数は「そのタグを持つスニペットの数」= 絞り込んだときの行数。1スニペット内の
+    // 重複 ("foo, foo" や "foo, Foo") を数えると、バッジの数と実際の結果が食い違う。
+    const seen = new Set();
     for(const name of tagsOf(s)){
       const key = name.toLowerCase();
+      if(seen.has(key)) continue;
+      seen.add(key);
       const cur = m.get(key);
       if(cur) cur.n++; else m.set(key, { label:name, n:1 });
     }
