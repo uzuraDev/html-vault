@@ -70,7 +70,8 @@
   .row{display:flex;gap:10px;align-items:center}
   .wrap{display:flex;flex-direction:column;height:100%}
 
-  /* 言語トグル (EN / 日本語) */
+  /* 言語トグル (EN / 日本語)。ログイン画面専用。
+     ログイン後は #accountMenu の中の .menu-item (#langBtnApp) に持たせている */
   .lang-btn{flex:none;font-size:11px;padding:5px 9px;border-radius:8px;background:transparent;border:1px solid var(--line);color:var(--muted);letter-spacing:.3px}
   .lang-btn:hover{color:var(--txt);border-color:var(--accent)}
 
@@ -78,11 +79,15 @@
   .demo-banner{padding:8px 14px;text-align:center;font-size:13px;background:#1d2735;border-bottom:1px solid var(--line);color:var(--txt)}
   .demo-banner a{color:var(--accent);text-decoration:none;font-weight:600}
   .demo-banner a:hover{text-decoration:underline}
-  /* #menuBtn だけ隠すと .menu-wrap が空のフレックス項目として残り、
-     .sidebar-head の gap:8px が1つ余分に効くので包み側もまとめて隠す */
-  body.demo #newBtn,body.demo #menuBtn,body.demo .menu-wrap,body.demo .del-item,body.demo .pin-item{display:none!important}
+  /* デモで隠すのは書き込み系の項目だけ。⋯ メニューごと隠すと中の言語切替まで消える。
+     デモはログイン画面をスキップして showApp() するので #langBtnLogin も出ず、
+     切替導線がゼロになってしまう (デモは公開ページなので言語は選べる必要がある)。
+     残る項目は言語切替1つだけで、setMenu は「表示されている最初の項目」へ入る */
+  body.demo #newBtn,body.demo #logoutBtn,body.demo .del-item,body.demo .pin-item{display:none!important}
   /* UI_HIDE_NEW="1" のとき（MCP 中心運用向け）。要素は DOM に残し、表示だけ消す
-     （applyI18n が #newBtn を直接参照しているため、削除すると i18n 適用が丸ごと止まる） */
+     （applyI18n が #newBtn を直接参照しているため、削除すると i18n 適用が丸ごと止まる）。
+     #newBtn はメニュー内の項目なので、隠すとメニューの先頭は言語切替になる
+     （setMenu が「表示されている最初の項目」へフォーカスする） */
   body.hide-new #newBtn{display:none!important}
 
   /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
@@ -100,9 +105,12 @@
   .menu{position:absolute;top:calc(100% + 6px);right:0;z-index:10;min-width:168px;
         padding:6px;background:var(--panel2);border:1px solid var(--line);
         border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.45)}
+  /* min-height: 常時表示のボタンから移してきた項目 (新規作成/言語切替) のタップ領域を確保する。
+     white-space:nowrap: 「日本語に切り替え」のような長いラベルで2行に折り返させない
+     (.menu の min-width より広くなるぶんはメニュー側が伸びる) */
   .menu-item{display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-start;
              padding:8px 10px;background:transparent;border:1px solid transparent;
-             color:var(--muted);border-radius:9px}
+             color:var(--muted);border-radius:9px;min-height:36px;white-space:nowrap}
   .menu-item:hover{background:var(--panel);color:var(--txt);border-color:var(--line)}
   .menu-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .menu-item svg{width:16px;height:16px;flex:none}
@@ -118,15 +126,16 @@
   /* min-width:0 が無いと flex item の既定 min-width:auto でプレビューの中身に
      押し広げられ、body ごと横スクロールする */
   .content{position:relative;flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--bg)}
-  .toolbar{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  /* 中身は検索欄だけ (新規作成は ⋯ メニューへ移した)。input は width:100% なので
+     flex にせず素のブロックで受ける。inline 要素のままだと行送りぶんの隙間が下に出る */
+  .toolbar{padding:10px 12px;border-bottom:1px solid var(--line)}
   /* タップ領域 40px。幅の media query では囲わない (横向きのスマホも対象にする) */
-  .toolbar input{height:40px}
+  .toolbar input{height:40px;display:block}
   /* type="search" のネイティブ装飾を無効化し、他の input と同じ見た目に揃える */
   .toolbar input[type=search]{-webkit-appearance:none;appearance:none}
   .toolbar input[type=search]::-webkit-search-decoration{-webkit-appearance:none}
   /* 本文検索の進行状況 (検索中 / 打ち切り)。非表示時は .hide で高さごと消す */
   .search-status{padding:6px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
-  #newBtn{flex:none;width:40px;height:40px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
   /* ログアウトをヘッダへ移して .sidebar-foot が無くなったぶん、一覧が画面下端まで
      伸びる。ホームインジケータに最後の行が隠れないよう safe-area を一覧側で受ける */
   .list{overflow:auto;flex:1;padding-bottom:env(safe-area-inset-bottom)}
@@ -283,18 +292,22 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
         <h1>📁 HTML Vault</h1>
-        <button class="lang-btn" id="langBtnApp" type="button"></button>
         <div class="menu-wrap">
           <button class="icon-btn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="accountMenu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+          <!-- 項目の並びは使用頻度順 (新規作成 → 言語切替 → ログアウト)。
+               setMenu(true) は「表示されている最初の項目」へフォーカスする。
+               tabindex="-1": role="menu" のフォーカス移動は上下キー (moveMenuFocus) が担当し、
+               Tab はメニューの外へ抜ける = focusout で閉じる、という ARIA の作法に合わせる -->
           <div class="menu hide" id="accountMenu" role="menu">
-            <button class="menu-item" id="logoutBtn" type="button" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
+            <button class="menu-item" id="newBtn" type="button" role="menuitem" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg><span id="newLabel"></span></button>
+            <button class="menu-item" id="langBtnApp" type="button" role="menuitem" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.4 3.9 5.6 3.9 9s-1.4 6.6-3.9 9c-2.5-2.4-3.9-5.6-3.9-9s1.4-6.6 3.9-9z"/></svg><span id="langLabelApp"></span></button>
+            <button class="menu-item" id="logoutBtn" type="button" role="menuitem" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
           </div>
         </div>
         <button class="icon-btn" id="collapseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
       </div>
       <div class="toolbar">
         <input id="search" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="primary" id="newBtn">＋</button>
       </div>
       <div class="search-status hide" id="searchStatus" aria-live="polite"></div>
       <div class="list" id="list"></div>
@@ -398,7 +411,7 @@ const I18N = {
     accountMenu: 'Account menu',
     logout: 'Log out',
     backToList: '← List',
-    emptyHint: 'Select an item from the list, or create a new one with ＋.',
+    emptyHint: 'Select an item from the list, or create a new one from the ⋯ menu.',
     emptyHintNoNew: 'Select an item from the list. (Press n to create one.)',
     modalNew: 'New snippet',
     modalEdit: 'Edit',
@@ -426,6 +439,8 @@ const I18N = {
     demoText: 'Read-only demo',
     demoLink: 'Deploy your own vault',
     langToggle: '日本語',
+    // メニュー項目のラベルは「押すと切り替わる先の言語」で書く (トグルの向きが一目で分かる)
+    langMenuItem: '日本語に切り替え',
     toastSaved: 'Saved',
     toastDeleted: 'Deleted',
     toastOrderFailed: 'Could not save the new order',
@@ -445,7 +460,7 @@ const I18N = {
     accountMenu: 'メニュー',
     logout: 'ログアウト',
     backToList: '← 一覧',
-    emptyHint: '左の一覧から選択するか、＋で新規作成してください。',
+    emptyHint: '左の一覧から選択するか、⋯ メニューから新規作成してください。',
     emptyHintNoNew: '左の一覧から選択してください。（新規作成は n キー）',
     modalNew: '新規スニペット',
     modalEdit: '編集',
@@ -473,6 +488,7 @@ const I18N = {
     demoText: '閲覧専用デモ',
     demoLink: '自分の Vault をデプロイ',
     langToggle: 'EN',
+    langMenuItem: 'Switch to English',
     toastSaved: '保存しました',
     toastDeleted: '削除しました',
     toastOrderFailed: '並べ替えを保存できませんでした',
@@ -502,12 +518,12 @@ function applyI18n(){
   $('search').placeholder = t('searchPlaceholder');
   $('search').setAttribute('aria-label', t('searchPlaceholder')); // placeholderはラベル代替にならないのでSR向け名を付与
   setSearchStatus(searchStatus); // 検索中/打ち切り表示も切替後の言語で出し直す
-  $('newBtn').title = t('newBtn');
-  $('newBtn').setAttribute('aria-label', t('newBtn')); // 表示は「＋」だけなのでSR向けの名前を付ける
+  // メニュー項目はラベルが可視テキストなので title / aria-label は付けない
+  // (title は説明として二重読みされるだけ)。title が要るのはアイコンのみの #menuBtn だけ
+  $('newLabel').textContent = t('newBtn');
   $('frame').setAttribute('title', t('previewTitle')); // iframeのアクセシブル名 (axe frame-title)
   $('menuBtn').title = t('accountMenu');
   $('menuBtn').setAttribute('aria-label', t('accountMenu')); // 表示は「⋯」だけなのでSR向けの名前を付ける
-  $('logoutBtn').title = t('logout');
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
   $('emptyState').textContent = t(HIDE_NEW ? 'emptyHintNoNew' : 'emptyHint');
@@ -523,9 +539,11 @@ function applyI18n(){
   $('mSave').textContent = t('save');
   $('demoText').textContent = t('demoText');
   $('demoLink').textContent = t('demoLink');
-  const toggle = t('langToggle');
-  $('langBtnLogin').textContent = toggle;
-  $('langBtnApp').textContent = toggle;
+  $('langBtnLogin').textContent = t('langToggle'); // ログイン画面は「EN / 日本語」の素のトグルのまま
+  // メニュー項目は切替先の言語で書くので、その span だけ lang 属性を合わせておく
+  // (読み上げが今のUI言語のまま英語/日本語を読もうとするのを避ける)
+  $('langLabelApp').textContent = t('langMenuItem');
+  $('langLabelApp').setAttribute('lang', LANG === 'ja' ? 'en' : 'ja');
   renderList(); // 動的部分 (バッジ/ボタンtitle/空表示) も更新
 }
 function toggleLang(){
@@ -884,16 +902,45 @@ function fmtBytes(b){ if(b<1024) return b+'B'; if(b<1024*1024) return (b/1024).t
 // ---- イベント ----
 $('loginBtn').onclick = login;
 $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
-$('logoutBtn').onclick = logout;
+// メニュー項目はどれも押したらメニューを畳む (logout は reload するが、
+// 畳まないままだと将来その場でログイン画面へ戻したときにメニューが開きっぱなしになる)
+$('logoutBtn').onclick = ()=>{ setMenu(false); logout(); };
 $('langBtnLogin').onclick = toggleLang;
-$('langBtnApp').onclick = toggleLang;
+// メニュー内の項目は押したらメニューを畳む。#langBtnApp 自体が消えるので、
+// フォーカスは開いた元の「⋯」へ戻す (押しっぱなしで宙に浮かせない)
+$('langBtnApp').onclick = ()=>{ toggleLang(); setMenu(false); $('menuBtn').focus(); };
 
-// ---- アカウントメニュー (ヘッダの「⋯」。中身はログアウトのみ) ----
+// ---- アカウントメニュー (ヘッダの「⋯」。新規作成 / 言語切替 / ログアウト) ----
+// UI_HIDE_NEW=1 や デモ (body.demo) では一部の項目が display:none になる。
+// 隠れた項目へ focus() しても何も起きないので、フォーカス移動は必ずこの一覧を通す。
+function visibleMenuItems(){
+  return Array.prototype.filter.call(
+    $('accountMenu').querySelectorAll('.menu-item'), el=>el.offsetParent !== null);
+}
 function setMenu(open){
   $('accountMenu').classList.toggle('hide', !open);
   $('menuBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
-  if(open) $('accountMenu').querySelector('.menu-item').focus();
+  // 先頭の項目ではなく「表示されている最初の項目」へ
+  if(open){ const items = visibleMenuItems(); if(items.length) items[0].focus(); }
 }
+// role="menu" を名乗る以上、上下/Home/End での移動を用意する。スクリーンリーダーは
+// menu ロールを見るとアプリケーションモードに入って矢印キーを奪うため、Tab だけでは
+// 「メニューとして操作できる」という約束を果たせない。
+function moveMenuFocus(e){
+  const key = e.key;
+  if(key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return;
+  const items = visibleMenuItems();
+  if(!items.length) return;
+  e.preventDefault(); // 矢印キーで背後の一覧ごとスクロールさせない
+  const cur = items.indexOf(document.activeElement);
+  let next;
+  if(key === 'Home') next = 0;
+  else if(key === 'End') next = items.length - 1;
+  else if(key === 'ArrowDown') next = cur < 0 ? 0 : (cur + 1) % items.length;
+  else next = cur < 0 ? items.length - 1 : (cur - 1 + items.length) % items.length;
+  items[next].focus();
+}
+$('accountMenu').addEventListener('keydown', moveMenuFocus);
 // stopPropagation しないと、直後に document の click が拾って開いた瞬間に閉じてしまう
 $('menuBtn').onclick = (e)=>{ e.stopPropagation(); setMenu($('accountMenu').classList.contains('hide')); };
 document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu-wrap')) setMenu(false); });
@@ -913,7 +960,7 @@ function handleKey(e){
     if($('modal').classList.contains('show')){ closeModal(); return; }
     return;
   }
-  // n: 新規作成。UI_HIDE_NEW="1" で＋を隠したときの代替導線を兼ねる。
+  // n: 新規作成。UI_HIDE_NEW="1" でメニューの「新規作成」を隠したときの代替導線を兼ねる。
   if(DEMO) return; // 読み取り専用デモは書き込み系を全部塞ぐ
   if(e.ctrlKey || e.metaKey || e.altKey) return;
   if(e.key !== 'n') return;
@@ -1094,7 +1141,9 @@ function onSearchInput(){
 $('search').addEventListener('compositionstart', ()=>{ composing = true; });
 $('search').addEventListener('compositionend', ()=>{ composing = false; onSearchInput(); });
 $('search').oninput = (e)=>{ if(composing || (e && e.isComposing)) return; onSearchInput(); };
-$('newBtn').onclick = ()=>openModal(false);
+// メニュー項目なので、モーダルを開く前にメニューを畳む
+// (開いたままだと Escape がモーダルではなくメニューに先に効く)
+$('newBtn').onclick = ()=>{ setMenu(false); openModal(false); };
 $('mCancel').onclick = closeModal;
 $('mSave').onclick = save;
 // オーバーレイの余白 (モーダル本体の外) をクリックしたら閉じる

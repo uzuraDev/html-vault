@@ -159,7 +159,7 @@ UI とサーバメッセージはビルド時に焼き込まれます（ラン�
 | `SEARCH_CACHE_MB` | `64` | 全文検索キャッシュのメモリ上限。本文のテキスト化を1回だけ行って再利用するため、2回目以降の検索が全ファイル読み直しを避けられます。保管量がこの上限を超えるなら増やしてください。`0` で実質無効 |
 | `AUTH_PASSWORD` | 未設定 | 初回ログインのパスワード（または `setpass.js`）。`auth.json` 生成までのみ使用 |
 | `APP_LANG` | `en` | UI/メッセージ言語（`en`/`ja`）。ビルド時に適用 |
-| `UI_HIDE_NEW` | `0` | `1` で UI の ＋（新規作成）ボタンを隠す。MCP 中心運用向け。**ビルド時**に適用（下記参照） |
+| `UI_HIDE_NEW` | `0` | `1` で ⋯ メニューの「新規作成」を隠す。MCP 中心運用向け。**ビルド時**に適用（下記参照） |
 | `API_TOKEN` | 未設定（無効） | ヘッドレスAPI用の Bearer トークン（`POST`/`GET /api/snippets`）。[stdio MCPサーバ](#mcp-連携ヘッドレスアップロード)を有効化 |
 | `MCP_SECRET_PATH` | 未設定（無効） | claude.ai 等のリモート MCP コネクター用。`/mcp/<MCP_SECRET_PATH>` を有効化（未設定なら 404）。生成例: `openssl rand -hex 24` |
 
@@ -172,9 +172,9 @@ UI とサーバメッセージはビルド時に焼き込まれます（ラン�
 - UI に `?debug=perf` を付けると、入力から再描画までを `console.table` に出します。付けなければ計測コードは1行も走りません。
 - それらしい件数で試したいとき: `node scripts/seed-local.mjs 200 data-seed` で `data-seed/` に200件を作り、`DATA_DIR=data-seed npm start` で起動します。**実データの `data/` を指定しないこと** — 既存の `index.json` がある出力先には `--force` なしでは書きません。
 
-### ＋ボタンを隠す（`UI_HIDE_NEW`・ビルド時）
+### 「新規作成」を隠す（`UI_HIDE_NEW`・ビルド時）
 
-保存を [MCP](#mcp-連携ヘッドレスアップロード) 経由で行っていて、ブラウザ UI は閲覧中心にしたい場合は `UI_HIDE_NEW=1` でビルドします。＋ボタンが消えます（要素は DOM に残し CSS で隠すだけ）。隠しても `n` キーで新規作成モーダルを開けます（`Escape` で閉じる）。書き込み API を塞ぐわけでは**ありません** — アクセス制御ではなく表示の設定です。
+保存を [MCP](#mcp-連携ヘッドレスアップロード) 経由で行っていて、ブラウザ UI は閲覧中心にしたい場合は `UI_HIDE_NEW=1` でビルドします。⋯ メニューから「新規作成」が消えます（要素は DOM に残し CSS で隠すだけ）。隠しても `n` キーで新規作成モーダルを開けます（`Escape` で閉じる）。書き込み API を塞ぐわけでは**ありません** — アクセス制御ではなく表示の設定です。
 
 - **Docker**: `.env` に `UI_HIDE_NEW=1` を書いて `docker compose up -d --build`（または `docker compose build --build-arg UI_HIDE_NEW=1`）
 - **Node**: `UI_HIDE_NEW=1 npm start`（または `UI_HIDE_NEW=1 npm run build:i18n`）
