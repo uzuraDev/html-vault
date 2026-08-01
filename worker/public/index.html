@@ -160,18 +160,27 @@
   }
   .list::-webkit-scrollbar-corner,.modal-body::-webkit-scrollbar-corner,
   textarea::-webkit-scrollbar-corner{background:transparent}
-  .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer;
+  /* 一覧の行は「タイトル1行」だけを持ち、高さは全行そろえて固定する。
+     更新日/バイト数/タグ/抜粋は行から外し、プレビュー上部の .detail 帯へ移した
+     (それらを行に置くと折り返し・抜粋の有無で行ごとに高さが変わる)。
+     高さはボーダー込みで数えたいので box-sizing:border-box。 */
+  .item{position:relative;box-sizing:border-box;height:46px;display:flex;align-items:center;
+        padding:0 14px;border-bottom:1px solid var(--line);cursor:pointer;
         transition:background-color var(--dur-1) var(--ease-std),box-shadow var(--dur-1) var(--ease-std)}
   .item:hover{background:var(--panel2)}
   /* 選択マーカーは border-left ではなく inset box-shadow。border だと幅を占有して
      選択した瞬間に行の中身が3px右へずれる */
   .item.active{background:var(--panel2);box-shadow:inset 3px 0 0 var(--accent)}
   /* 右端の行アクションは3つ (ピン/DL/削除) で 8+40+72px。省略記号がその下に潜らないよう余白を取る */
-  .item .t{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:100px}
-  .item .meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
-  /* 行アクション (DL/削除): 通常は隠し、ホバー/選択時に右上へアイコン表示 */
+  .item .t{flex:1;min-width:0;display:flex;align-items:center;gap:6px;font-weight:600;font-size:14px;padding-right:100px}
+  /* 省略記号はタイトル文字列側に付ける。本文ヒットのバッジは .t の直下に並べて縮ませない
+     (.t 自体を nowrap+ellipsis にすると、長いタイトルの行でバッジごと切り落とされる) */
+  .item .t .t-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .t .tag{flex:none}
   .item.dragging{opacity:.45;transition:opacity var(--dur-1) var(--ease-out)}
-  .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:8px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std),color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std)}
+  /* 行アクション (ピン/DL/削除): 通常は隠し、ホバー/選択時に右端へアイコン表示。
+     行が固定高になったので top 固定ではなく上下中央に置く */
+  .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std),color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std)}
   .item .del-item{right:8px}
   .item .dl-item{right:40px}
   .item .pin-item{right:72px}
@@ -189,12 +198,27 @@
   @media (hover:none){ .item .del-item,.item .dl-item,.item .pin-item{opacity:.5} .item .pin-item.pinned{opacity:1} }
   .tag{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1px 7px;font-size:10px}
   .tag.body{background:transparent;border-color:var(--accent2);color:var(--accent)}
-  .item .excerpt{font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
-  .item .excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
 
   /* 開いているスニペットのアクションバー (中身はモバイルの「← 一覧」のみ) */
   .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left))}
   .tabs button{font-size:13px;padding:6px 12px}
+  /* 選択中スニペットの詳細帯。一覧の行から外した 更新日/バイト数/タグ をここへ集約し、
+     本文検索でその行が本文ヒットなら抜粋も出す。未選択のときは .tabs と同じく出さない
+     (display は renderDetail() が切り替える) */
+  .detail{display:none;align-items:center;flex-wrap:wrap;gap:5px 10px;font-size:11px;color:var(--muted);
+          padding:7px 12px;padding-left:calc(12px + env(safe-area-inset-left));
+          border-bottom:1px solid var(--line)}
+  /* タグも抜粋と同じく2行で打ち切る。タグ数は上限が無いので、折り返しに任せると
+     帯がタグの数だけ伸びてプレビューを押し下げる (タグ1行 ≒ 20px + 行間4px で2行ぶん = 44px)。
+     入りきらないぶんは title 属性のツールチップで読めるようにしてある */
+  .detail .d-tags{display:flex;flex-wrap:wrap;gap:4px;min-width:0;max-height:44px;overflow:hidden}
+  .detail .tag{flex:none}
+  /* 抜粋は必ず行頭から2行まで。帯が伸び続けないようにクランプする。
+     min-height も同じ2行ぶんに揃えて、抜粋の有無や行数で帯の高さが変わらないようにする
+     (本文検索中は 打鍵→ローカル絞り込み→サーバー応答 で抜粋が消えては戻るため、
+      高さを可変にするとプレビューが打鍵のたびに上下に跳ねる) */
+  .detail .d-excerpt{flex-basis:100%;min-height:2.8em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
+  .detail .d-excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
   /* プレビューは読み込み完了 (.loaded) までは透明にして、白面のちらつきを出さない */
   iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0;color-scheme:light;
@@ -263,6 +287,9 @@
   @media (min-width:761px){
     .wrap.sb-collapsed .sidebar{display:none}
     .wrap.sb-collapsed .expand-btn{display:flex}
+    /* サイドバーを畳むと .expand-btn (絶対配置・左上 10px + 32px) が詳細帯の頭に重なるので、その分だけ空ける。
+       素の .detail が持つ safe-area の逃げを消さないよう calc に足す (ノッチ端末の横向きは 761px 以上になる) */
+    .wrap.sb-collapsed .detail{padding-left:calc(52px + env(safe-area-inset-left))}
   }
 </style>
 </head>
@@ -319,6 +346,11 @@
       <div class="tabs" id="tabs" style="display:none">
         <button class="mobile-back" id="backBtn"></button>
       </div>
+      <!-- 選択中スニペットの詳細 (更新日/バイト数/タグ/本文ヒットの抜粋)。中身は renderDetail() が組む。
+           行から日付/サイズ/タグが消えた分、選択の切替を支援技術にも伝えるため aria-live を付ける
+           (読み上げが騒がしくならないよう、renderDetail() は中身が実際に変わったときだけ書き換える)。
+           aria-label は applyI18n() が言語に応じて入れる -->
+      <div class="detail" id="detail" role="group" aria-live="polite"></div>
       <div class="view" id="view">
         <div class="empty" id="emptyState"></div>
         <iframe id="frame" class="hide" title="Preview"
@@ -380,6 +412,7 @@ let SEARCH_Q = '';         // 現在の検索語 (ハイライト用)
 let currentId = null;
 let editingId = null;
 let restored = false; // 起動時の「最後のページ」自動復元を1回だけ行うためのフラグ
+let DETAIL_HTML = ''; // 詳細帯に今入っている HTML。aria-live の無駄な読み上げを避ける差分判定用
 
 // ---- localStorage helpers ----
 function lsGet(k){ try{ return localStorage.getItem(k); }catch{ return null; } }
@@ -426,6 +459,7 @@ const I18N = {
     save: 'Save',
     noSnippets: 'No snippets yet',
     bodyBadge: 'Body',
+    detailBar: 'Details of the selected snippet',
     download: 'Download',
     del: 'Delete',
     pin: 'Pin',
@@ -475,6 +509,7 @@ const I18N = {
     save: '保存',
     noSnippets: 'スニペットがありません',
     bodyBadge: '本文',
+    detailBar: '選択中のスニペットの詳細',
     download: 'ダウンロード',
     del: '削除',
     pin: 'ピン留め',
@@ -526,6 +561,7 @@ function applyI18n(){
   $('menuBtn').setAttribute('aria-label', t('accountMenu')); // 表示は「⋯」だけなのでSR向けの名前を付ける
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
+  $('detail').setAttribute('aria-label', t('detailBar')); // 帯の中身は値だけなので、まとまりの名前だけ SR に渡す
   $('emptyState').textContent = t(HIDE_NEW ? 'emptyHintNoNew' : 'emptyHint');
   $('modalTitle').textContent = editingId ? t('modalEdit') : t('modalNew');
   $('mTitleLabel').textContent = t('fieldTitle');
@@ -657,6 +693,9 @@ async function loadList(){
 // 検索結果(サーバー)を表示中なら SEARCH_RESULTS を、未検索なら SNIPPETS を描画する。
 function renderList(){
   const rows = SEARCH_RESULTS !== null ? SEARCH_RESULTS : SNIPPETS;
+  // 詳細帯もここで更新する。openSnippet() は必ず renderList() を通るので選択の切替に追従し、
+  // 保存/ピン/削除/再読込 (loadList) や言語切替 (applyI18n) でも同じ経路で最新の値に直る。
+  renderDetail();
   const list = $('list'); list.innerHTML='';
   if(rows.length===0){
     const d = document.createElement('div');
@@ -668,18 +707,14 @@ function renderList(){
   for(const s of rows){
     const div = document.createElement('div');
     div.className = 'item'+(s.id===currentId?' active':'');
-    const tags = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean)
-      .map(tag=>`<span class="tag">${esc(tag)}</span>`).join(' ');
-    // 本文のみのヒットには「本文」バッジ＋抜粋を表示する。
+    // 本文のみのヒットには「本文」バッジをタイトルの隣に付ける (行から日付/タグ/抜粋が
+    // 消えたので、これが無いと「本文にヒットした行」だと分からない)。抜粋は詳細帯側。
     const bodyBadge = (s.field==='body') ? `<span class="tag body">${esc(t('bodyBadge'))}</span>` : '';
-    const excerpt = s.excerpt ? `<div class="excerpt">${highlight(s.excerpt, SEARCH_Q)}</div>` : '';
     const pinTitle = esc(t(s.pinned ? 'unpin' : 'pin'));
     div.innerHTML = `<button type="button" class="pin-item${s.pinned?' pinned':''}" title="${pinTitle}" aria-label="${pinTitle}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
       <button type="button" class="dl-item" title="${esc(t('download'))}" aria-label="${esc(t('download'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/></svg></button>
       <button type="button" class="del-item" title="${esc(t('del'))}" aria-label="${esc(t('del'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
-      <div class="t">${esc(s.title)}</div>
-      <div class="meta"><span>${fmtDate(s.updated)}</span><span>${fmtBytes(s.bytes)}</span>${bodyBadge}${tags}</div>
-      ${excerpt}`;
+      <div class="t"><span class="t-text">${esc(s.title)}</span>${bodyBadge}</div>`;
     div.querySelector('.pin-item').onclick = (e)=>{ e.stopPropagation(); togglePin(s.id, !s.pinned); };
     div.querySelector('.dl-item').onclick = (e)=>{ e.stopPropagation(); downloadSnippet(s.id); };
     div.querySelector('.del-item').onclick = (e)=>{ e.stopPropagation(); delById(s.id, s.title); };
@@ -690,6 +725,36 @@ function renderList(){
     if(SEARCH_RESULTS === null && !DEMO) enableDrag(div, s);
     list.appendChild(div);
   }
+}
+
+// プレビュー上部の詳細帯。一覧の行から外した 更新日/バイト数/タグ を選択中のスニペットについて出す。
+// 本文検索中でその行が本文ヒットなら抜粋も添える。未選択なら帯ごと隠す (.tabs と同じ扱い)。
+// メタ情報は常に最新の SNIPPETS を正とし、抜粋だけ検索結果側から拾う
+// (検索結果は検索した時点のスナップショットなので、保存直後は古い値を持ちうる)。
+function renderDetail(){
+  const bar = $('detail');
+  const hit = (currentId && SEARCH_RESULTS !== null) ? SEARCH_RESULTS.find(x=>x.id===currentId) : null;
+  const s = currentId ? (SNIPPETS.find(x=>x.id===currentId) || hit) : null;
+  if(!s){ setDetailHtml(bar, ''); bar.style.display='none'; return; }
+  const tagList = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean);
+  // タグは2行を超えるとCSS側で切られるので、全量は title 属性で読めるようにしておく
+  const tags = tagList.map(tag=>`<span class="tag">${esc(tag)}</span>`).join('');
+  // 抜粋の枠は「本文検索が走る長さ (2文字以上)」の間は中身が空でも置いておく。
+  // 打鍵直後はローカル絞り込みが excerpt を空にするので、枠ごと消すと 150ms 後の
+  // サーバー応答で戻るまでの間だけ帯が縮み、プレビューが打鍵のたびに上下に跳ねる。
+  const exHtml = hit && hit.excerpt ? highlight(hit.excerpt, SEARCH_Q) : '';
+  const ex = (exHtml || (SEARCH_Q||'').trim().length >= 2) ? `<div class="d-excerpt">${exHtml}</div>` : '';
+  setDetailHtml(bar, `<span>${esc(fmtDate(s.updated))}</span><span>${esc(fmtBytes(s.bytes))}</span>`
+    + (tags ? `<span class="d-tags" title="${esc(tagList.join(', '))}">${tags}</span>` : '') + ex);
+  bar.style.display = 'flex';
+}
+
+// 帯は aria-live なので、同じ中身を書き戻すだけでも読み上げが走る。
+// renderList() は検索の打鍵ごとに呼ばれるため、実際に変わったときだけ差し替える。
+function setDetailHtml(bar, html){
+  if(DETAIL_HTML === html) return;
+  DETAIL_HTML = html;
+  bar.innerHTML = html;
 }
 
 // 抜粋内の検索語を <mark> でハイライト (まず esc してから安全に置換)。
@@ -705,7 +770,7 @@ function highlight(text, q){
 function openSnippet(id){
   currentId = id;
   lsSet(LS_LAST, id); // 「最後に開いたページ」を記憶
-  renderList();
+  renderList(); // 選択行のハイライトと、プレビュー上部の詳細帯 (renderDetail) をここで更新する
   $('emptyState').classList.add('hide');
   // タブ枠はモバイルの「← 一覧」ボタン用途のみ。PCでは出さない。
   // 判定は開いた時点の一度きりで、resize / orientationchange には追従しない
@@ -805,6 +870,7 @@ async function delById(id, title){
     if(currentId===id){
       currentId=null;
       $('tabs').style.display='none';
+      $('detail').style.display='none'; // 一覧の再読込を待たずに帯を畳む
       $('frame').classList.remove('loaded');
       $('frame').classList.add('hide'); $('frame').src='about:blank';
       $('emptyState').classList.remove('hide');

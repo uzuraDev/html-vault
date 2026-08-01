@@ -15,6 +15,7 @@
     "searching": "Searching…",
     "searchTruncated": "Body search covered the {n} most recent items",
     "bodyBadge": "body",
+    "detailBar": "Details of the selected snippet",
     "newTitle": "New snippet",
     "backToList": "← List",
     "emptyState": "Select an item on the left, or create one from the ⋯ menu.",
