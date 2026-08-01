@@ -1017,6 +1017,7 @@ $('accountMenu').addEventListener('focusout', (e)=>{
 
 // ---- キーボード操作 (document の keydown はこの1本だけ) ----
 // 上のレイヤーから順に処理して return する。ショートカットを足すときもこの構造を崩さない。
+// リスナを複数並べると Escape 一発で別々のUIが同時に閉じるなど、順序に依存した壊れ方をする。
 function handleKey(e){
   // IME 変換中のキーは拾わない (変換確定の Enter/Escape、および「ん」の入力途中など)。
   if(e.isComposing || e.keyCode === 229) return;
@@ -1218,10 +1219,6 @@ $('backBtn').onclick = ()=>{
   $('content').classList.add('hidden-mobile');
   $('sidebar').classList.remove('collapsed');
 };
-
-// ---- キーボードショートカット ----
-// document への keydown リスナはこの1本だけにする。複数並べると Escape 一発で
-// 別々のUIが同時に閉じるなど、順序に依存した壊れ方をするため。
 
 // ---- 起動 ----
 // UI_HIDE_NEW: 空状態の文言を applyI18n() が分岐させるので、その前にクラスを付ける。

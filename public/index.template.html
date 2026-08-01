@@ -124,26 +124,26 @@
      伸びる。ホームインジケータに最後の行が隠れないよう safe-area を一覧側で受ける */
   .list{overflow:auto;flex:1;padding-bottom:env(safe-area-inset-bottom)}
   /* スクロールバー: UIのトーンに合わせる。トラックは透明にして
-     各要素の背景 (.list=--panel / pre.src=#0b0d11) をそのまま透かす */
-  .list,.modal-body,pre.src,textarea{
+     各要素の背景 (.list=--panel) をそのまま透かす */
+  .list,.modal-body,textarea{
     scrollbar-width:thin;
     scrollbar-color:var(--scroll-thumb) transparent;
   }
   .list::-webkit-scrollbar,.modal-body::-webkit-scrollbar,
-  pre.src::-webkit-scrollbar,textarea::-webkit-scrollbar{width:10px;height:10px}
+  textarea::-webkit-scrollbar{width:10px;height:10px}
   .list::-webkit-scrollbar-track,.modal-body::-webkit-scrollbar-track,
-  pre.src::-webkit-scrollbar-track,textarea::-webkit-scrollbar-track{background:transparent}
+  textarea::-webkit-scrollbar-track{background:transparent}
   .list::-webkit-scrollbar-thumb,.modal-body::-webkit-scrollbar-thumb,
-  pre.src::-webkit-scrollbar-thumb,textarea::-webkit-scrollbar-thumb{
+  textarea::-webkit-scrollbar-thumb{
     background:var(--scroll-thumb);border-radius:999px;
     border:2px solid transparent;background-clip:padding-box;
   }
   .list::-webkit-scrollbar-thumb:hover,.modal-body::-webkit-scrollbar-thumb:hover,
-  pre.src::-webkit-scrollbar-thumb:hover,textarea::-webkit-scrollbar-thumb:hover{
+  textarea::-webkit-scrollbar-thumb:hover{
     background:var(--scroll-thumb-hover);background-clip:padding-box;
   }
   .list::-webkit-scrollbar-corner,.modal-body::-webkit-scrollbar-corner,
-  pre.src::-webkit-scrollbar-corner,textarea::-webkit-scrollbar-corner{background:transparent}
+  textarea::-webkit-scrollbar-corner{background:transparent}
   /* 一覧の行は「タイトル1行」だけを持ち、高さは全行そろえて固定する。
      更新日/バイト数/タグ/抜粋は行から外し、プレビュー上部の .detail 帯へ移した
      (それらを行に置くと折り返し・抜粋の有無で行ごとに高さが変わる)。
@@ -185,7 +185,6 @@
   /* ビュー切替 */
   .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left))}
   .tabs button{font-size:13px;padding:6px 12px}
-  .tabs button.on{background:var(--accent2);border-color:var(--accent2)}
   /* 選択中スニペットの詳細帯。一覧の行から外した 更新日/バイト数/タグ をここへ集約し、
      本文検索でその行が本文ヒットなら抜粋も出す。未選択のときは .tabs と同じく出さない
      (display は renderDetail() が切り替える) */
@@ -208,7 +207,6 @@
   iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0;color-scheme:light;
          opacity:0;transition:opacity var(--dur-2) var(--ease-out)}
   iframe.loaded{opacity:1}
-  pre.src{flex:1;margin:0;overflow:auto;padding:14px;background:#0b0d11;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
   .empty{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:24px}
 
   /* モーダル (ヘッダ / スクロールする本文 / 固定フッタ の3段。余分な余白を作らない) */
@@ -336,7 +334,6 @@
         <iframe id="frame" class="hide"
           sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
           referrerpolicy="no-referrer"></iframe>
-        <pre class="src hide" id="srcView"></pre>
       </div>
     </section>
   </main>
@@ -535,7 +532,6 @@ function openSnippet(id){
   }
 }
 function showPreview(){
-  $('srcView').classList.add('hide');
   // 読み込み完了まで透明にしておき、load 後に .loaded でフェードインさせる。
   const f = $('frame'); f.classList.remove('hide','loaded');
   f.onload = ()=> f.classList.add('loaded');
@@ -599,7 +595,6 @@ async function delById(id, title){
       $('detail').style.display='none'; // 一覧の再読込を待たずに帯を畳む
       $('frame').classList.remove('loaded');
       $('frame').classList.add('hide'); $('frame').src='about:blank';
-      $('srcView').classList.add('hide');
       $('emptyState').classList.remove('hide');
       // モバイルでは一覧に戻す
       $('content').classList.add('hidden-mobile');
@@ -698,11 +693,6 @@ $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 // メニュー項目はどれも押したらメニューを畳む (logout は reload するが、
 // 畳まないままだと将来その場でログイン画面へ戻したときにメニューが開きっぱなしになる)
 $('logoutBtn').onclick = ()=>{ setMenu(false); logout(); };
-// 検索は2段構え。
-//  1. タイトル/タグは手元の SNIPPETS だけで絞り込んで同期で描画する (ネットワーク往復なし)。
-//     1文字目から効く。
-//  2. 本文検索だけを ~150ms デバウンスでサーバーへ投げ、届いた時点で結果を丸ごと差し替える
-//     (サーバー結果はローカル結果の上位集合とは限らないため、マージせず置き換える)。
 // ---- アカウントメニュー (ヘッダの「⋯」。新規作成 / ログアウト) ----
 // UI_HIDE_NEW=1 では #newBtn が display:none になる。隠れた項目へ focus() しても
 // 何も起きずフォーカスが迷子になるので、フォーカス移動は必ずこの一覧を通す。
@@ -744,6 +734,7 @@ $('accountMenu').addEventListener('focusout', (e)=>{
 
 // ---- キーボード操作 (document の keydown はこの1本だけ) ----
 // 上のレイヤーから順に処理して return する。ショートカットを足すときもこの構造を崩さない。
+// リスナを複数並べると Escape 一発で別々のUIが同時に閉じるなど、順序に依存した壊れ方をする。
 function handleKey(e){
   // IME 変換中のキーは拾わない (変換確定の Enter/Escape、および「ん」の入力途中など)。
   if(e.isComposing || e.keyCode === 229) return;
@@ -797,6 +788,11 @@ function setSearchStatus(text){
   el.classList.toggle('hide', !text);
 }
 
+// 検索は2段構え。
+//  1. タイトル/タグは手元の SNIPPETS だけで絞り込んで同期で描画する (ネットワーク往復なし)。
+//     1文字目から効く。
+//  2. 本文検索だけを ~150ms デバウンスでサーバーへ投げ、届いた時点で結果を丸ごと差し替える
+//     (サーバー結果はローカル結果の上位集合とは限らないため、マージせず置き換える)。
 // 手元の SNIPPETS のタイトル/タグだけを絞り込む。サーバー応答の待ち時間が無い。
 // 並びは filter だけで作る (sort しない) — 表示順はサーバーが決めているため、
 // ここで並べ替えると本文検索の結果が届いた瞬間に順序が飛ぶ。
@@ -895,10 +891,6 @@ $('backBtn').onclick = ()=>{
   $('content').classList.add('hidden-mobile');
   $('sidebar').classList.remove('collapsed');
 };
-
-// ---- キーボードショートカット ----
-// document への keydown リスナはこの1本だけにする。複数並べると Escape 一発で
-// 別々のUIが同時に閉じるなど、順序に依存した壊れ方をするため。
 
 // ---- サイドバーの折りたたみ/展開 (状態は localStorage に記憶。デスクトップ専用) ----
 const LS_SB = 'hv:sbCollapsed';
