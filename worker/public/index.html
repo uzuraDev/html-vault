@@ -177,9 +177,9 @@
      (.t 自体を nowrap+ellipsis にすると、長いタイトルの行でバッジごと切り落とされる) */
   .item .t .t-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .item .t .tag{flex:none}
+  .item.dragging{opacity:.45;transition:opacity var(--dur-1) var(--ease-out)}
   /* 行アクション (ピン/DL/削除): 通常は隠し、ホバー/選択時に右端へアイコン表示。
      行が固定高になったので top 固定ではなく上下中央に置く */
-  .item.dragging{opacity:.45;transition:opacity var(--dur-1) var(--ease-out)}
   .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std),color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std)}
   .item .del-item{right:8px}
   .item .dl-item{right:40px}
@@ -208,10 +208,16 @@
   .detail{display:none;align-items:center;flex-wrap:wrap;gap:5px 10px;font-size:11px;color:var(--muted);
           padding:7px 12px;padding-left:calc(12px + env(safe-area-inset-left));
           border-bottom:1px solid var(--line)}
-  .detail .d-tags{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+  /* タグも抜粋と同じく2行で打ち切る。タグ数は上限が無いので、折り返しに任せると
+     帯がタグの数だけ伸びてプレビューを押し下げる (タグ1行 ≒ 20px + 行間4px で2行ぶん = 44px)。
+     入りきらないぶんは title 属性のツールチップで読めるようにしてある */
+  .detail .d-tags{display:flex;flex-wrap:wrap;gap:4px;min-width:0;max-height:44px;overflow:hidden}
   .detail .tag{flex:none}
-  /* 抜粋は必ず行頭から2行まで。帯が伸び続けないようにクランプする */
-  .detail .d-excerpt{flex-basis:100%;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
+  /* 抜粋は必ず行頭から2行まで。帯が伸び続けないようにクランプする。
+     min-height も同じ2行ぶんに揃えて、抜粋の有無や行数で帯の高さが変わらないようにする
+     (本文検索中は 打鍵→ローカル絞り込み→サーバー応答 で抜粋が消えては戻るため、
+      高さを可変にするとプレビューが打鍵のたびに上下に跳ねる) */
+  .detail .d-excerpt{flex-basis:100%;min-height:2.8em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
   .detail .d-excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
   /* プレビューは読み込み完了 (.loaded) までは透明にして、白面のちらつきを出さない */
@@ -281,8 +287,9 @@
   @media (min-width:761px){
     .wrap.sb-collapsed .sidebar{display:none}
     .wrap.sb-collapsed .expand-btn{display:flex}
-    /* サイドバーを畳むと .expand-btn (絶対配置・左上 10px + 32px) が詳細帯の頭に重なるので、その分だけ空ける */
-    .wrap.sb-collapsed .detail{padding-left:52px}
+    /* サイドバーを畳むと .expand-btn (絶対配置・左上 10px + 32px) が詳細帯の頭に重なるので、その分だけ空ける。
+       素の .detail が持つ safe-area の逃げを消さないよう calc に足す (ノッチ端末の横向きは 761px 以上になる) */
+    .wrap.sb-collapsed .detail{padding-left:calc(52px + env(safe-area-inset-left))}
   }
 </style>
 </head>
@@ -339,8 +346,11 @@
       <div class="tabs" id="tabs" style="display:none">
         <button class="mobile-back" id="backBtn"></button>
       </div>
-      <!-- 選択中スニペットの詳細 (更新日/バイト数/タグ/本文ヒットの抜粋)。中身は renderDetail() が組む -->
-      <div class="detail" id="detail" role="group"></div>
+      <!-- 選択中スニペットの詳細 (更新日/バイト数/タグ/本文ヒットの抜粋)。中身は renderDetail() が組む。
+           行から日付/サイズ/タグが消えた分、選択の切替を支援技術にも伝えるため aria-live を付ける
+           (読み上げが騒がしくならないよう、renderDetail() は中身が実際に変わったときだけ書き換える)。
+           aria-label は applyI18n() が言語に応じて入れる -->
+      <div class="detail" id="detail" role="group" aria-live="polite"></div>
       <div class="view" id="view">
         <div class="empty" id="emptyState"></div>
         <iframe id="frame" class="hide" title="Preview"
@@ -402,6 +412,7 @@ let SEARCH_Q = '';         // 現在の検索語 (ハイライト用)
 let currentId = null;
 let editingId = null;
 let restored = false; // 起動時の「最後のページ」自動復元を1回だけ行うためのフラグ
+let DETAIL_HTML = ''; // 詳細帯に今入っている HTML。aria-live の無駄な読み上げを避ける差分判定用
 
 // ---- localStorage helpers ----
 function lsGet(k){ try{ return localStorage.getItem(k); }catch{ return null; } }
@@ -722,16 +733,28 @@ function renderList(){
 // (検索結果は検索した時点のスナップショットなので、保存直後は古い値を持ちうる)。
 function renderDetail(){
   const bar = $('detail');
-  if(!currentId){ bar.style.display='none'; bar.innerHTML=''; return; }
-  const hit = SEARCH_RESULTS !== null ? SEARCH_RESULTS.find(x=>x.id===currentId) : null;
-  const s = SNIPPETS.find(x=>x.id===currentId) || hit;
-  if(!s){ bar.style.display='none'; bar.innerHTML=''; return; }
-  const tags = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean)
-    .map(tag=>`<span class="tag">${esc(tag)}</span>`).join('');
-  const ex = hit && hit.excerpt ? `<div class="d-excerpt">${highlight(hit.excerpt, SEARCH_Q)}</div>` : '';
-  bar.innerHTML = `<span>${esc(fmtDate(s.updated))}</span><span>${esc(fmtBytes(s.bytes))}</span>`
-    + (tags ? `<span class="d-tags">${tags}</span>` : '') + ex;
+  const hit = (currentId && SEARCH_RESULTS !== null) ? SEARCH_RESULTS.find(x=>x.id===currentId) : null;
+  const s = currentId ? (SNIPPETS.find(x=>x.id===currentId) || hit) : null;
+  if(!s){ setDetailHtml(bar, ''); bar.style.display='none'; return; }
+  const tagList = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean);
+  // タグは2行を超えるとCSS側で切られるので、全量は title 属性で読めるようにしておく
+  const tags = tagList.map(tag=>`<span class="tag">${esc(tag)}</span>`).join('');
+  // 抜粋の枠は「本文検索が走る長さ (2文字以上)」の間は中身が空でも置いておく。
+  // 打鍵直後はローカル絞り込みが excerpt を空にするので、枠ごと消すと 150ms 後の
+  // サーバー応答で戻るまでの間だけ帯が縮み、プレビューが打鍵のたびに上下に跳ねる。
+  const exHtml = hit && hit.excerpt ? highlight(hit.excerpt, SEARCH_Q) : '';
+  const ex = (exHtml || (SEARCH_Q||'').trim().length >= 2) ? `<div class="d-excerpt">${exHtml}</div>` : '';
+  setDetailHtml(bar, `<span>${esc(fmtDate(s.updated))}</span><span>${esc(fmtBytes(s.bytes))}</span>`
+    + (tags ? `<span class="d-tags" title="${esc(tagList.join(', '))}">${tags}</span>` : '') + ex);
   bar.style.display = 'flex';
+}
+
+// 帯は aria-live なので、同じ中身を書き戻すだけでも読み上げが走る。
+// renderList() は検索の打鍵ごとに呼ばれるため、実際に変わったときだけ差し替える。
+function setDetailHtml(bar, html){
+  if(DETAIL_HTML === html) return;
+  DETAIL_HTML = html;
+  bar.innerHTML = html;
 }
 
 // 抜粋内の検索語を <mark> でハイライト (まず esc してから安全に置換)。
