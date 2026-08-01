@@ -11,7 +11,7 @@ FROM node:26-slim
 
 # 表示言語をビルド時に選択（en/ja）。例: docker build --build-arg APP_LANG=ja .
 ARG APP_LANG=en
-# UI の「＋」（新規作成）を隠すか（0/1）。MCP 中心運用で書き込み導線を出したくない場合に 1。
+# ⋯ メニューの「新規作成」を隠すか（0/1）。MCP 中心運用で書き込み導線を出したくない場合に 1。
 # 例: docker build --build-arg UI_HIDE_NEW=1 .
 # APP_LANG と同じくビルド時にしか評価されない（下の build-i18n で焼き込む）。
 ARG UI_HIDE_NEW=0
