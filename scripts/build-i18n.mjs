@@ -5,7 +5,7 @@
  * 仕組み:
  *   - public/index.template.html の `{{key}}` を locales/<lang>.json の client.<key> で置換
  *   - `{{__T_JSON__}}` には client 全体の JSON を注入（JS から T.key で参照）
- *   - `{{__BODY_CLASS__}}` には UI_HIDE_NEW=1 のとき `hide-new` を注入（＋ボタンを CSS で隠す）
+ *   - `{{__BODY_CLASS__}}` には UI_HIDE_NEW=1 のとき `hide-new` を注入（メニューの「新規作成」を CSS で隠す）
  * ランタイム切替ではなく「ビルド時に1言語を焼き込む」方式。
  * UI_HIDE_NEW も同じくビルド時にしか効かない（Docker はイメージビルド時、素の Node は npm start）。
  */
@@ -25,9 +25,9 @@ const htmlEscape = (s) =>
 
 let html = readFileSync(join(ROOT, 'public', 'index.template.html'), 'utf8');
 
-// 0) UI_HIDE_NEW=1 なら <body> に hide-new を付けて ＋ ボタンを CSS で隠す。
+// 0) UI_HIDE_NEW=1 なら <body> に hide-new を付けて、⋯ メニューの「新規作成」を CSS で隠す。
 //    要素自体は DOM に残す（JS が #newBtn を直接参照しているため）。
-//    空状態の文言も「＋」に言及しないものへ差し替える。`{{__T_JSON__}}` の注入より前に
+//    空状態の文言も新規作成の導線に言及しないものへ差し替える。`{{__T_JSON__}}` の注入より前に
 //    t を書き換えないと、HTML 側 (`{{emptyState}}`) と JS 側 (`T.emptyState`) がズレる。
 const hideNew = process.env.UI_HIDE_NEW === '1';
 html = html.split('{{__BODY_CLASS__}}').join(hideNew ? 'hide-new' : '');

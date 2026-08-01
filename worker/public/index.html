@@ -70,7 +70,8 @@
   .row{display:flex;gap:10px;align-items:center}
   .wrap{display:flex;flex-direction:column;height:100%}
 
-  /* 言語トグル (EN / 日本語) */
+  /* 言語トグル (EN / 日本語)。ログイン画面専用。
+     ログイン後は #accountMenu の中の .menu-item (#langBtnApp) に持たせている */
   .lang-btn{flex:none;font-size:11px;padding:5px 9px;border-radius:8px;background:transparent;border:1px solid var(--line);color:var(--muted);letter-spacing:.3px}
   .lang-btn:hover{color:var(--txt);border-color:var(--accent)}
 
@@ -78,11 +79,15 @@
   .demo-banner{padding:8px 14px;text-align:center;font-size:13px;background:#1d2735;border-bottom:1px solid var(--line);color:var(--txt)}
   .demo-banner a{color:var(--accent);text-decoration:none;font-weight:600}
   .demo-banner a:hover{text-decoration:underline}
-  /* #menuBtn だけ隠すと .menu-wrap が空のフレックス項目として残り、
-     .sidebar-head の gap:8px が1つ余分に効くので包み側もまとめて隠す */
-  body.demo #newBtn,body.demo #menuBtn,body.demo .menu-wrap,body.demo .del-item,body.demo .pin-item{display:none!important}
+  /* デモで隠すのは書き込み系の項目だけ。⋯ メニューごと隠すと中の言語切替まで消える。
+     デモはログイン画面をスキップして showApp() するので #langBtnLogin も出ず、
+     切替導線がゼロになってしまう (デモは公開ページなので言語は選べる必要がある)。
+     残る項目は言語切替1つだけで、setMenu は「表示されている最初の項目」へ入る */
+  body.demo #newBtn,body.demo #logoutBtn,body.demo .del-item,body.demo .pin-item{display:none!important}
   /* UI_HIDE_NEW="1" のとき（MCP 中心運用向け）。要素は DOM に残し、表示だけ消す
-     （applyI18n が #newBtn を直接参照しているため、削除すると i18n 適用が丸ごと止まる） */
+     （applyI18n が #newBtn を直接参照しているため、削除すると i18n 適用が丸ごと止まる）。
+     #newBtn はメニュー内の項目なので、隠すとメニューの先頭は言語切替になる
+     （setMenu が「表示されている最初の項目」へフォーカスする） */
   body.hide-new #newBtn{display:none!important}
 
   /* サイドバー上部: ブランド + アクション(右寄せ・コンパクト) */
@@ -100,9 +105,12 @@
   .menu{position:absolute;top:calc(100% + 6px);right:0;z-index:10;min-width:168px;
         padding:6px;background:var(--panel2);border:1px solid var(--line);
         border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.45)}
+  /* min-height: 常時表示のボタンから移してきた項目 (新規作成/言語切替) のタップ領域を確保する。
+     white-space:nowrap: 「日本語に切り替え」のような長いラベルで2行に折り返させない
+     (.menu の min-width より広くなるぶんはメニュー側が伸びる) */
   .menu-item{display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-start;
              padding:8px 10px;background:transparent;border:1px solid transparent;
-             color:var(--muted);border-radius:9px}
+             color:var(--muted);border-radius:9px;min-height:36px;white-space:nowrap}
   .menu-item:hover{background:var(--panel);color:var(--txt);border-color:var(--line)}
   .menu-item:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .menu-item svg{width:16px;height:16px;flex:none}
@@ -118,15 +126,16 @@
   /* min-width:0 が無いと flex item の既定 min-width:auto でプレビューの中身に
      押し広げられ、body ごと横スクロールする */
   .content{position:relative;flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--bg)}
-  .toolbar{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  /* 中身は検索欄だけ (新規作成は ⋯ メニューへ移した)。input は width:100% なので
+     flex にせず素のブロックで受ける。inline 要素のままだと行送りぶんの隙間が下に出る */
+  .toolbar{padding:10px 12px;border-bottom:1px solid var(--line)}
   /* タップ領域 40px。幅の media query では囲わない (横向きのスマホも対象にする) */
-  .toolbar input{height:40px}
+  .toolbar input{height:40px;display:block}
   /* type="search" のネイティブ装飾を無効化し、他の input と同じ見た目に揃える */
   .toolbar input[type=search]{-webkit-appearance:none;appearance:none}
   .toolbar input[type=search]::-webkit-search-decoration{-webkit-appearance:none}
   /* 本文検索の進行状況 (検索中 / 打ち切り)。非表示時は .hide で高さごと消す */
   .search-status{padding:6px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
-  #newBtn{flex:none;width:40px;height:40px;padding:0;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center}
   /* ログアウトをヘッダへ移して .sidebar-foot が無くなったぶん、一覧が画面下端まで
      伸びる。ホームインジケータに最後の行が隠れないよう safe-area を一覧側で受ける */
   .list{overflow:auto;flex:1;padding-bottom:env(safe-area-inset-bottom)}
@@ -151,18 +160,27 @@
   }
   .list::-webkit-scrollbar-corner,.modal-body::-webkit-scrollbar-corner,
   textarea::-webkit-scrollbar-corner{background:transparent}
-  .item{position:relative;padding:12px 14px;border-bottom:1px solid var(--line);cursor:pointer;
+  /* 一覧の行は「タイトル1行」だけを持ち、高さは全行そろえて固定する。
+     更新日/バイト数/タグ/抜粋は行から外し、プレビュー上部の .detail 帯へ移した
+     (それらを行に置くと折り返し・抜粋の有無で行ごとに高さが変わる)。
+     高さはボーダー込みで数えたいので box-sizing:border-box。 */
+  .item{position:relative;box-sizing:border-box;height:46px;display:flex;align-items:center;
+        padding:0 14px;border-bottom:1px solid var(--line);cursor:pointer;
         transition:background-color var(--dur-1) var(--ease-std),box-shadow var(--dur-1) var(--ease-std)}
   .item:hover{background:var(--panel2)}
   /* 選択マーカーは border-left ではなく inset box-shadow。border だと幅を占有して
      選択した瞬間に行の中身が3px右へずれる */
   .item.active{background:var(--panel2);box-shadow:inset 3px 0 0 var(--accent)}
   /* 右端の行アクションは3つ (ピン/DL/削除) で 8+40+72px。省略記号がその下に潜らないよう余白を取る */
-  .item .t{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:100px}
-  .item .meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
-  /* 行アクション (DL/削除): 通常は隠し、ホバー/選択時に右上へアイコン表示 */
+  .item .t{flex:1;min-width:0;display:flex;align-items:center;gap:6px;font-weight:600;font-size:14px;padding-right:100px}
+  /* 省略記号はタイトル文字列側に付ける。本文ヒットのバッジは .t の直下に並べて縮ませない
+     (.t 自体を nowrap+ellipsis にすると、長いタイトルの行でバッジごと切り落とされる) */
+  .item .t .t-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .item .t .tag{flex:none}
   .item.dragging{opacity:.45;transition:opacity var(--dur-1) var(--ease-out)}
-  .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:8px;display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std),color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std)}
+  /* 行アクション (ピン/DL/削除): 通常は隠し、ホバー/選択時に右端へアイコン表示。
+     行が固定高になったので top 固定ではなく上下中央に置く */
+  .item .del-item,.item .dl-item,.item .pin-item{position:absolute;top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border-radius:8px;background:transparent;border:1px solid transparent;color:var(--muted);opacity:0;transition:opacity var(--dur-1) var(--ease-std),background var(--dur-1) var(--ease-std),color var(--dur-1) var(--ease-std),border-color var(--dur-1) var(--ease-std)}
   .item .del-item{right:8px}
   .item .dl-item{right:40px}
   .item .pin-item{right:72px}
@@ -180,12 +198,27 @@
   @media (hover:none){ .item .del-item,.item .dl-item,.item .pin-item{opacity:.5} .item .pin-item.pinned{opacity:1} }
   .tag{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1px 7px;font-size:10px}
   .tag.body{background:transparent;border-color:var(--accent2);color:var(--accent)}
-  .item .excerpt{font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
-  .item .excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
 
   /* 開いているスニペットのアクションバー (中身はモバイルの「← 一覧」のみ) */
   .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left))}
   .tabs button{font-size:13px;padding:6px 12px}
+  /* 選択中スニペットの詳細帯。一覧の行から外した 更新日/バイト数/タグ をここへ集約し、
+     本文検索でその行が本文ヒットなら抜粋も出す。未選択のときは .tabs と同じく出さない
+     (display は renderDetail() が切り替える) */
+  .detail{display:none;align-items:center;flex-wrap:wrap;gap:5px 10px;font-size:11px;color:var(--muted);
+          padding:7px 12px;padding-left:calc(12px + env(safe-area-inset-left));
+          border-bottom:1px solid var(--line)}
+  /* タグも抜粋と同じく2行で打ち切る。タグ数は上限が無いので、折り返しに任せると
+     帯がタグの数だけ伸びてプレビューを押し下げる (タグ1行 ≒ 20px + 行間4px で2行ぶん = 44px)。
+     入りきらないぶんは title 属性のツールチップで読めるようにしてある */
+  .detail .d-tags{display:flex;flex-wrap:wrap;gap:4px;min-width:0;max-height:44px;overflow:hidden}
+  .detail .tag{flex:none}
+  /* 抜粋は必ず行頭から2行まで。帯が伸び続けないようにクランプする。
+     min-height も同じ2行ぶんに揃えて、抜粋の有無や行数で帯の高さが変わらないようにする
+     (本文検索中は 打鍵→ローカル絞り込み→サーバー応答 で抜粋が消えては戻るため、
+      高さを可変にするとプレビューが打鍵のたびに上下に跳ねる) */
+  .detail .d-excerpt{flex-basis:100%;min-height:2.8em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
+  .detail .d-excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
   /* プレビューは読み込み完了 (.loaded) までは透明にして、白面のちらつきを出さない */
   iframe{flex:1;border:0;width:100%;background:#fff;border-radius:0;color-scheme:light;
@@ -254,6 +287,9 @@
   @media (min-width:761px){
     .wrap.sb-collapsed .sidebar{display:none}
     .wrap.sb-collapsed .expand-btn{display:flex}
+    /* サイドバーを畳むと .expand-btn (絶対配置・左上 10px + 32px) が詳細帯の頭に重なるので、その分だけ空ける。
+       素の .detail が持つ safe-area の逃げを消さないよう calc に足す (ノッチ端末の横向きは 761px 以上になる) */
+    .wrap.sb-collapsed .detail{padding-left:calc(52px + env(safe-area-inset-left))}
   }
 </style>
 </head>
@@ -283,18 +319,22 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
         <h1>📁 HTML Vault</h1>
-        <button class="lang-btn" id="langBtnApp" type="button"></button>
         <div class="menu-wrap">
           <button class="icon-btn" id="menuBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="accountMenu"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+          <!-- 項目の並びは使用頻度順 (新規作成 → 言語切替 → ログアウト)。
+               setMenu(true) は「表示されている最初の項目」へフォーカスする。
+               tabindex="-1": role="menu" のフォーカス移動は上下キー (moveMenuFocus) が担当し、
+               Tab はメニューの外へ抜ける = focusout で閉じる、という ARIA の作法に合わせる -->
           <div class="menu hide" id="accountMenu" role="menu">
-            <button class="menu-item" id="logoutBtn" type="button" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
+            <button class="menu-item" id="newBtn" type="button" role="menuitem" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg><span id="newLabel"></span></button>
+            <button class="menu-item" id="langBtnApp" type="button" role="menuitem" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.4 3.9 5.6 3.9 9s-1.4 6.6-3.9 9c-2.5-2.4-3.9-5.6-3.9-9s1.4-6.6 3.9-9z"/></svg><span id="langLabelApp"></span></button>
+            <button class="menu-item" id="logoutBtn" type="button" role="menuitem" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg><span id="logoutLabel"></span></button>
           </div>
         </div>
         <button class="icon-btn" id="collapseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
       </div>
       <div class="toolbar">
         <input id="search" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false">
-        <button class="primary" id="newBtn">＋</button>
       </div>
       <div class="search-status hide" id="searchStatus" aria-live="polite"></div>
       <div class="list" id="list"></div>
@@ -306,6 +346,11 @@
       <div class="tabs" id="tabs" style="display:none">
         <button class="mobile-back" id="backBtn"></button>
       </div>
+      <!-- 選択中スニペットの詳細 (更新日/バイト数/タグ/本文ヒットの抜粋)。中身は renderDetail() が組む。
+           行から日付/サイズ/タグが消えた分、選択の切替を支援技術にも伝えるため aria-live を付ける
+           (読み上げが騒がしくならないよう、renderDetail() は中身が実際に変わったときだけ書き換える)。
+           aria-label は applyI18n() が言語に応じて入れる -->
+      <div class="detail" id="detail" role="group" aria-live="polite"></div>
       <div class="view" id="view">
         <div class="empty" id="emptyState"></div>
         <iframe id="frame" class="hide" title="Preview"
@@ -367,6 +412,7 @@ let SEARCH_Q = '';         // 現在の検索語 (ハイライト用)
 let currentId = null;
 let editingId = null;
 let restored = false; // 起動時の「最後のページ」自動復元を1回だけ行うためのフラグ
+let DETAIL_HTML = ''; // 詳細帯に今入っている HTML。aria-live の無駄な読み上げを避ける差分判定用
 
 // ---- localStorage helpers ----
 function lsGet(k){ try{ return localStorage.getItem(k); }catch{ return null; } }
@@ -398,7 +444,7 @@ const I18N = {
     accountMenu: 'Account menu',
     logout: 'Log out',
     backToList: '← List',
-    emptyHint: 'Select an item from the list, or create a new one with ＋.',
+    emptyHint: 'Select an item from the list, or create a new one from the ⋯ menu.',
     emptyHintNoNew: 'Select an item from the list. (Press n to create one.)',
     modalNew: 'New snippet',
     modalEdit: 'Edit',
@@ -413,6 +459,7 @@ const I18N = {
     save: 'Save',
     noSnippets: 'No snippets yet',
     bodyBadge: 'Body',
+    detailBar: 'Details of the selected snippet',
     download: 'Download',
     del: 'Delete',
     pin: 'Pin',
@@ -426,6 +473,8 @@ const I18N = {
     demoText: 'Read-only demo',
     demoLink: 'Deploy your own vault',
     langToggle: '日本語',
+    // メニュー項目のラベルは「押すと切り替わる先の言語」で書く (トグルの向きが一目で分かる)
+    langMenuItem: '日本語に切り替え',
     toastSaved: 'Saved',
     toastDeleted: 'Deleted',
     toastOrderFailed: 'Could not save the new order',
@@ -445,7 +494,7 @@ const I18N = {
     accountMenu: 'メニュー',
     logout: 'ログアウト',
     backToList: '← 一覧',
-    emptyHint: '左の一覧から選択するか、＋で新規作成してください。',
+    emptyHint: '左の一覧から選択するか、⋯ メニューから新規作成してください。',
     emptyHintNoNew: '左の一覧から選択してください。（新規作成は n キー）',
     modalNew: '新規スニペット',
     modalEdit: '編集',
@@ -460,6 +509,7 @@ const I18N = {
     save: '保存',
     noSnippets: 'スニペットがありません',
     bodyBadge: '本文',
+    detailBar: '選択中のスニペットの詳細',
     download: 'ダウンロード',
     del: '削除',
     pin: 'ピン留め',
@@ -473,6 +523,7 @@ const I18N = {
     demoText: '閲覧専用デモ',
     demoLink: '自分の Vault をデプロイ',
     langToggle: 'EN',
+    langMenuItem: 'Switch to English',
     toastSaved: '保存しました',
     toastDeleted: '削除しました',
     toastOrderFailed: '並べ替えを保存できませんでした',
@@ -502,14 +553,15 @@ function applyI18n(){
   $('search').placeholder = t('searchPlaceholder');
   $('search').setAttribute('aria-label', t('searchPlaceholder')); // placeholderはラベル代替にならないのでSR向け名を付与
   setSearchStatus(searchStatus); // 検索中/打ち切り表示も切替後の言語で出し直す
-  $('newBtn').title = t('newBtn');
-  $('newBtn').setAttribute('aria-label', t('newBtn')); // 表示は「＋」だけなのでSR向けの名前を付ける
+  // メニュー項目はラベルが可視テキストなので title / aria-label は付けない
+  // (title は説明として二重読みされるだけ)。title が要るのはアイコンのみの #menuBtn だけ
+  $('newLabel').textContent = t('newBtn');
   $('frame').setAttribute('title', t('previewTitle')); // iframeのアクセシブル名 (axe frame-title)
   $('menuBtn').title = t('accountMenu');
   $('menuBtn').setAttribute('aria-label', t('accountMenu')); // 表示は「⋯」だけなのでSR向けの名前を付ける
-  $('logoutBtn').title = t('logout');
   $('logoutLabel').textContent = t('logout');
   $('backBtn').textContent = t('backToList');
+  $('detail').setAttribute('aria-label', t('detailBar')); // 帯の中身は値だけなので、まとまりの名前だけ SR に渡す
   $('emptyState').textContent = t(HIDE_NEW ? 'emptyHintNoNew' : 'emptyHint');
   $('modalTitle').textContent = editingId ? t('modalEdit') : t('modalNew');
   $('mTitleLabel').textContent = t('fieldTitle');
@@ -523,9 +575,11 @@ function applyI18n(){
   $('mSave').textContent = t('save');
   $('demoText').textContent = t('demoText');
   $('demoLink').textContent = t('demoLink');
-  const toggle = t('langToggle');
-  $('langBtnLogin').textContent = toggle;
-  $('langBtnApp').textContent = toggle;
+  $('langBtnLogin').textContent = t('langToggle'); // ログイン画面は「EN / 日本語」の素のトグルのまま
+  // メニュー項目は切替先の言語で書くので、その span だけ lang 属性を合わせておく
+  // (読み上げが今のUI言語のまま英語/日本語を読もうとするのを避ける)
+  $('langLabelApp').textContent = t('langMenuItem');
+  $('langLabelApp').setAttribute('lang', LANG === 'ja' ? 'en' : 'ja');
   renderList(); // 動的部分 (バッジ/ボタンtitle/空表示) も更新
 }
 function toggleLang(){
@@ -639,6 +693,9 @@ async function loadList(){
 // 検索結果(サーバー)を表示中なら SEARCH_RESULTS を、未検索なら SNIPPETS を描画する。
 function renderList(){
   const rows = SEARCH_RESULTS !== null ? SEARCH_RESULTS : SNIPPETS;
+  // 詳細帯もここで更新する。openSnippet() は必ず renderList() を通るので選択の切替に追従し、
+  // 保存/ピン/削除/再読込 (loadList) や言語切替 (applyI18n) でも同じ経路で最新の値に直る。
+  renderDetail();
   const list = $('list'); list.innerHTML='';
   if(rows.length===0){
     const d = document.createElement('div');
@@ -650,18 +707,14 @@ function renderList(){
   for(const s of rows){
     const div = document.createElement('div');
     div.className = 'item'+(s.id===currentId?' active':'');
-    const tags = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean)
-      .map(tag=>`<span class="tag">${esc(tag)}</span>`).join(' ');
-    // 本文のみのヒットには「本文」バッジ＋抜粋を表示する。
+    // 本文のみのヒットには「本文」バッジをタイトルの隣に付ける (行から日付/タグ/抜粋が
+    // 消えたので、これが無いと「本文にヒットした行」だと分からない)。抜粋は詳細帯側。
     const bodyBadge = (s.field==='body') ? `<span class="tag body">${esc(t('bodyBadge'))}</span>` : '';
-    const excerpt = s.excerpt ? `<div class="excerpt">${highlight(s.excerpt, SEARCH_Q)}</div>` : '';
     const pinTitle = esc(t(s.pinned ? 'unpin' : 'pin'));
     div.innerHTML = `<button type="button" class="pin-item${s.pinned?' pinned':''}" title="${pinTitle}" aria-label="${pinTitle}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
       <button type="button" class="dl-item" title="${esc(t('download'))}" aria-label="${esc(t('download'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/></svg></button>
       <button type="button" class="del-item" title="${esc(t('del'))}" aria-label="${esc(t('del'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
-      <div class="t">${esc(s.title)}</div>
-      <div class="meta"><span>${fmtDate(s.updated)}</span><span>${fmtBytes(s.bytes)}</span>${bodyBadge}${tags}</div>
-      ${excerpt}`;
+      <div class="t"><span class="t-text">${esc(s.title)}</span>${bodyBadge}</div>`;
     div.querySelector('.pin-item').onclick = (e)=>{ e.stopPropagation(); togglePin(s.id, !s.pinned); };
     div.querySelector('.dl-item').onclick = (e)=>{ e.stopPropagation(); downloadSnippet(s.id); };
     div.querySelector('.del-item').onclick = (e)=>{ e.stopPropagation(); delById(s.id, s.title); };
@@ -672,6 +725,36 @@ function renderList(){
     if(SEARCH_RESULTS === null && !DEMO) enableDrag(div, s);
     list.appendChild(div);
   }
+}
+
+// プレビュー上部の詳細帯。一覧の行から外した 更新日/バイト数/タグ を選択中のスニペットについて出す。
+// 本文検索中でその行が本文ヒットなら抜粋も添える。未選択なら帯ごと隠す (.tabs と同じ扱い)。
+// メタ情報は常に最新の SNIPPETS を正とし、抜粋だけ検索結果側から拾う
+// (検索結果は検索した時点のスナップショットなので、保存直後は古い値を持ちうる)。
+function renderDetail(){
+  const bar = $('detail');
+  const hit = (currentId && SEARCH_RESULTS !== null) ? SEARCH_RESULTS.find(x=>x.id===currentId) : null;
+  const s = currentId ? (SNIPPETS.find(x=>x.id===currentId) || hit) : null;
+  if(!s){ setDetailHtml(bar, ''); bar.style.display='none'; return; }
+  const tagList = (s.tags||'').split(',').map(tag=>tag.trim()).filter(Boolean);
+  // タグは2行を超えるとCSS側で切られるので、全量は title 属性で読めるようにしておく
+  const tags = tagList.map(tag=>`<span class="tag">${esc(tag)}</span>`).join('');
+  // 抜粋の枠は「本文検索が走る長さ (2文字以上)」の間は中身が空でも置いておく。
+  // 打鍵直後はローカル絞り込みが excerpt を空にするので、枠ごと消すと 150ms 後の
+  // サーバー応答で戻るまでの間だけ帯が縮み、プレビューが打鍵のたびに上下に跳ねる。
+  const exHtml = hit && hit.excerpt ? highlight(hit.excerpt, SEARCH_Q) : '';
+  const ex = (exHtml || (SEARCH_Q||'').trim().length >= 2) ? `<div class="d-excerpt">${exHtml}</div>` : '';
+  setDetailHtml(bar, `<span>${esc(fmtDate(s.updated))}</span><span>${esc(fmtBytes(s.bytes))}</span>`
+    + (tags ? `<span class="d-tags" title="${esc(tagList.join(', '))}">${tags}</span>` : '') + ex);
+  bar.style.display = 'flex';
+}
+
+// 帯は aria-live なので、同じ中身を書き戻すだけでも読み上げが走る。
+// renderList() は検索の打鍵ごとに呼ばれるため、実際に変わったときだけ差し替える。
+function setDetailHtml(bar, html){
+  if(DETAIL_HTML === html) return;
+  DETAIL_HTML = html;
+  bar.innerHTML = html;
 }
 
 // 抜粋内の検索語を <mark> でハイライト (まず esc してから安全に置換)。
@@ -687,7 +770,7 @@ function highlight(text, q){
 function openSnippet(id){
   currentId = id;
   lsSet(LS_LAST, id); // 「最後に開いたページ」を記憶
-  renderList();
+  renderList(); // 選択行のハイライトと、プレビュー上部の詳細帯 (renderDetail) をここで更新する
   $('emptyState').classList.add('hide');
   // タブ枠はモバイルの「← 一覧」ボタン用途のみ。PCでは出さない。
   // 判定は開いた時点の一度きりで、resize / orientationchange には追従しない
@@ -787,6 +870,7 @@ async function delById(id, title){
     if(currentId===id){
       currentId=null;
       $('tabs').style.display='none';
+      $('detail').style.display='none'; // 一覧の再読込を待たずに帯を畳む
       $('frame').classList.remove('loaded');
       $('frame').classList.add('hide'); $('frame').src='about:blank';
       $('emptyState').classList.remove('hide');
@@ -884,16 +968,45 @@ function fmtBytes(b){ if(b<1024) return b+'B'; if(b<1024*1024) return (b/1024).t
 // ---- イベント ----
 $('loginBtn').onclick = login;
 $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
-$('logoutBtn').onclick = logout;
+// メニュー項目はどれも押したらメニューを畳む (logout は reload するが、
+// 畳まないままだと将来その場でログイン画面へ戻したときにメニューが開きっぱなしになる)
+$('logoutBtn').onclick = ()=>{ setMenu(false); logout(); };
 $('langBtnLogin').onclick = toggleLang;
-$('langBtnApp').onclick = toggleLang;
+// メニュー内の項目は押したらメニューを畳む。#langBtnApp 自体が消えるので、
+// フォーカスは開いた元の「⋯」へ戻す (押しっぱなしで宙に浮かせない)
+$('langBtnApp').onclick = ()=>{ toggleLang(); setMenu(false); $('menuBtn').focus(); };
 
-// ---- アカウントメニュー (ヘッダの「⋯」。中身はログアウトのみ) ----
+// ---- アカウントメニュー (ヘッダの「⋯」。新規作成 / 言語切替 / ログアウト) ----
+// UI_HIDE_NEW=1 や デモ (body.demo) では一部の項目が display:none になる。
+// 隠れた項目へ focus() しても何も起きないので、フォーカス移動は必ずこの一覧を通す。
+function visibleMenuItems(){
+  return Array.prototype.filter.call(
+    $('accountMenu').querySelectorAll('.menu-item'), el=>el.offsetParent !== null);
+}
 function setMenu(open){
   $('accountMenu').classList.toggle('hide', !open);
   $('menuBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
-  if(open) $('accountMenu').querySelector('.menu-item').focus();
+  // 先頭の項目ではなく「表示されている最初の項目」へ
+  if(open){ const items = visibleMenuItems(); if(items.length) items[0].focus(); }
 }
+// role="menu" を名乗る以上、上下/Home/End での移動を用意する。スクリーンリーダーは
+// menu ロールを見るとアプリケーションモードに入って矢印キーを奪うため、Tab だけでは
+// 「メニューとして操作できる」という約束を果たせない。
+function moveMenuFocus(e){
+  const key = e.key;
+  if(key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return;
+  const items = visibleMenuItems();
+  if(!items.length) return;
+  e.preventDefault(); // 矢印キーで背後の一覧ごとスクロールさせない
+  const cur = items.indexOf(document.activeElement);
+  let next;
+  if(key === 'Home') next = 0;
+  else if(key === 'End') next = items.length - 1;
+  else if(key === 'ArrowDown') next = cur < 0 ? 0 : (cur + 1) % items.length;
+  else next = cur < 0 ? items.length - 1 : (cur - 1 + items.length) % items.length;
+  items[next].focus();
+}
+$('accountMenu').addEventListener('keydown', moveMenuFocus);
 // stopPropagation しないと、直後に document の click が拾って開いた瞬間に閉じてしまう
 $('menuBtn').onclick = (e)=>{ e.stopPropagation(); setMenu($('accountMenu').classList.contains('hide')); };
 document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu-wrap')) setMenu(false); });
@@ -913,7 +1026,7 @@ function handleKey(e){
     if($('modal').classList.contains('show')){ closeModal(); return; }
     return;
   }
-  // n: 新規作成。UI_HIDE_NEW="1" で＋を隠したときの代替導線を兼ねる。
+  // n: 新規作成。UI_HIDE_NEW="1" でメニューの「新規作成」を隠したときの代替導線を兼ねる。
   if(DEMO) return; // 読み取り専用デモは書き込み系を全部塞ぐ
   if(e.ctrlKey || e.metaKey || e.altKey) return;
   if(e.key !== 'n') return;
@@ -1094,7 +1207,9 @@ function onSearchInput(){
 $('search').addEventListener('compositionstart', ()=>{ composing = true; });
 $('search').addEventListener('compositionend', ()=>{ composing = false; onSearchInput(); });
 $('search').oninput = (e)=>{ if(composing || (e && e.isComposing)) return; onSearchInput(); };
-$('newBtn').onclick = ()=>openModal(false);
+// メニュー項目なので、モーダルを開く前にメニューを畳む
+// (開いたままだと Escape がモーダルではなくメニューに先に効く)
+$('newBtn').onclick = ()=>{ setMenu(false); openModal(false); };
 $('mCancel').onclick = closeModal;
 $('mSave').onclick = save;
 // オーバーレイの余白 (モーダル本体の外) をクリックしたら閉じる

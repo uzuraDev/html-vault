@@ -68,7 +68,7 @@ browser login, so it works headless.
   isn't a CSRF vector). The browser/cookie flow still uses CSRF.
 - `upload_html` is meant to run only when you explicitly ask to save — the tool
   description tells the model not to upload on every generation.
-- If MCP is your main way in, you can hide the ＋ (new snippet) button in the
-  browser UI by building the vault with `UI_HIDE_NEW=1` — it's a build-time
+- If MCP is your main way in, you can hide the "New snippet" item in the browser
+  UI's ⋯ menu by building the vault with `UI_HIDE_NEW=1` — it's a build-time
   setting, so runtime env vars won't do it. See the
   [main README → environment variables](../README.md#environment-variables).
