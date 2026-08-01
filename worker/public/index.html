@@ -183,7 +183,7 @@
   .item .excerpt{font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.4}
   .item .excerpt mark{background:rgba(91,157,255,.28);color:var(--txt);border-radius:3px;padding:0 1px}
 
-  /* 開いているスニペットのアクションバー (編集 / モバイルの「← 一覧」) */
+  /* 開いているスニペットのアクションバー (中身はモバイルの「← 一覧」のみ) */
   .tabs{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left))}
   .tabs button{font-size:13px;padding:6px 12px}
   .view{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -690,6 +690,8 @@ function openSnippet(id){
   renderList();
   $('emptyState').classList.add('hide');
   // タブ枠はモバイルの「← 一覧」ボタン用途のみ。PCでは出さない。
+  // 判定は開いた時点の一度きりで、resize / orientationchange には追従しない
+  // (Express 版 public/index.template.html と同じ挙動。直すなら両版そろえて CSS 側へ寄せる)
   $('tabs').style.display = window.matchMedia('(max-width:760px)').matches ? 'flex' : 'none';
   showPreview();
   // モバイル: コンテンツ表示
