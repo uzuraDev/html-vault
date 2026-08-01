@@ -106,9 +106,38 @@
   /* min-width:0 が無いと flex item の既定 min-width:auto でプレビューの中身に
      押し広げられ、body ごと横スクロールする */
   .content{position:relative;flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--bg)}
+  /* 並び替え / 絞り込み。検索欄の上に横並びで置く。押すと .menu (⋯ メニューと同じ部品) が開く。
+     項目は JS が組み立てる (タグは実データ由来で、件数も変わるため) */
+  .filterbar{display:flex;gap:8px;padding:10px 12px 0}
+  .fb-wrap{position:relative;flex:1;min-width:0}
+  .fb-btn{display:flex;align-items:center;gap:6px;width:100%;height:34px;padding:0 10px;font-size:12px;
+          color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:9px}
+  .fb-btn:hover{color:var(--txt);border-color:var(--accent)}
+  .fb-btn svg{width:14px;height:14px;flex:none}
+  /* サイドバーは 240px まで狭められる。ラベルは潰れてよい (状態は色とバッジでも分かる) */
+  .fb-btn .fb-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+  /* 既定から動いている軸はアクセント色にして、メニューを畳んでいても効いていると分かるようにする */
+  .fb-btn.on{color:var(--accent);border-color:var(--accent2)}
+  /* 絞り込みの選択数 (タグ数 + ピン留めのみ) */
+  .fb-count{flex:none;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--accent2);
+            color:#fff;font-size:10px;line-height:16px;text-align:center}
+  /* 親 (.fb-wrap) が狭いので ⋯ メニューの min-width は使わず中身なりに広げる。
+     並び替えは左端、絞り込みは右端 (.menu の既定) に寄せて、どちらもサイドバーの内側へ落とす */
+  .fb-wrap .menu{min-width:0;width:max-content;max-width:260px;max-height:min(50vh,320px);overflow:auto}
+  #sortMenu{left:0;right:auto}
+  .menu-sep{height:1px;margin:5px 4px;background:var(--line)}
+  /* チェック印の桁は常に確保する。選択の有無でラベルが横にずれると読みにくい */
+  .menu-item .check{flex:none;width:14px;text-align:center;color:var(--accent)}
+  /* タグ名は長いものがあるので項目の中で省略記号に落とす (全文は title 属性で読める) */
+  .menu-item .mi-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+  .menu-item .mi-count{flex:none;color:var(--muted);font-size:11px}
+  /* タグが1件も無いときの案内。ボタンではないのでホバーにも反応させない */
+  .menu-item[aria-disabled="true"]{color:var(--muted);cursor:default}
+  .menu-item[aria-disabled="true"]:hover{background:transparent;border-color:transparent;color:var(--muted)}
   /* 中身は検索欄だけ (新規作成は ⋯ メニューへ移した)。input は width:100% なので
-     flex にせず素のブロックで受ける。inline 要素のままだと行送りぶんの隙間が下に出る */
-  .toolbar{padding:10px 12px;border-bottom:1px solid var(--line)}
+     flex にせず素のブロックで受ける。inline 要素のままだと行送りぶんの隙間が下に出る。
+     上は .filterbar と間を詰める (.filterbar 側が下 padding を持たない) */
+  .toolbar{padding:8px 12px 10px;border-bottom:1px solid var(--line)}
   /* タップ領域 40px。幅の media query では囲わない (横向きのスマホも対象にする) */
   .toolbar input{height:40px;display:block}
   /* type="search" のネイティブ装飾を無効化し、他の input と同じ見た目に揃える */
@@ -125,25 +154,25 @@
   .list{overflow:auto;flex:1;padding-bottom:env(safe-area-inset-bottom)}
   /* スクロールバー: UIのトーンに合わせる。トラックは透明にして
      各要素の背景 (.list=--panel) をそのまま透かす */
-  .list,.modal-body,textarea{
+  .list,.modal-body,textarea,.menu{
     scrollbar-width:thin;
     scrollbar-color:var(--scroll-thumb) transparent;
   }
   .list::-webkit-scrollbar,.modal-body::-webkit-scrollbar,
-  textarea::-webkit-scrollbar{width:10px;height:10px}
+  textarea::-webkit-scrollbar,.menu::-webkit-scrollbar{width:10px;height:10px}
   .list::-webkit-scrollbar-track,.modal-body::-webkit-scrollbar-track,
-  textarea::-webkit-scrollbar-track{background:transparent}
+  textarea::-webkit-scrollbar-track,.menu::-webkit-scrollbar-track{background:transparent}
   .list::-webkit-scrollbar-thumb,.modal-body::-webkit-scrollbar-thumb,
-  textarea::-webkit-scrollbar-thumb{
+  textarea::-webkit-scrollbar-thumb,.menu::-webkit-scrollbar-thumb{
     background:var(--scroll-thumb);border-radius:999px;
     border:2px solid transparent;background-clip:padding-box;
   }
   .list::-webkit-scrollbar-thumb:hover,.modal-body::-webkit-scrollbar-thumb:hover,
-  textarea::-webkit-scrollbar-thumb:hover{
+  textarea::-webkit-scrollbar-thumb:hover,.menu::-webkit-scrollbar-thumb:hover{
     background:var(--scroll-thumb-hover);background-clip:padding-box;
   }
   .list::-webkit-scrollbar-corner,.modal-body::-webkit-scrollbar-corner,
-  textarea::-webkit-scrollbar-corner{background:transparent}
+  textarea::-webkit-scrollbar-corner,.menu::-webkit-scrollbar-corner{background:transparent}
   /* 一覧の行は「タイトル1行」だけを持ち、高さは全行そろえて固定する。
      更新日/バイト数/タグ/抜粋は行から外し、プレビュー上部の .detail 帯へ移した
      (それらを行に置くと折り返し・抜粋の有無で行ごとに高さが変わる)。
@@ -310,6 +339,18 @@
         </div>
         <button class="icon-btn" id="collapseBtn" title="{{collapseMenu}}" aria-label="{{collapseMenu}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg></button>
       </div>
+      <!-- 並び替え / 絞り込み。中身 (項目・ラベル・件数バッジ) は renderSortMenu() /
+           renderFilterMenu() が組む -->
+      <div class="filterbar">
+        <div class="fb-wrap">
+          <button class="fb-btn" id="sortBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="sortMenu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h10"/><path d="M3 12h7"/><path d="M3 18h4"/><path d="M17 4v16"/><path d="M14 17l3 3 3-3"/></svg><span class="fb-label" id="sortLabel"></span></button>
+          <div class="menu hide" id="sortMenu" role="menu" aria-label="{{sortMenuLabel}}"></div>
+        </div>
+        <div class="fb-wrap">
+          <button class="fb-btn" id="filterBtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="filterMenu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg><span class="fb-label" id="filterLabel"></span><span class="fb-count hide" id="filterCount"></span></button>
+          <div class="menu hide" id="filterMenu" role="menu" aria-label="{{filterMenuLabel}}"></div>
+        </div>
+      </div>
       <div class="toolbar">
         <input id="search" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{{searchPlaceholder}}" aria-label="{{searchPlaceholder}}">
       </div>
@@ -398,6 +439,138 @@ function toast(msg, isErr){
 function lsGet(k){ try{ return localStorage.getItem(k); }catch{ return null; } }
 function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch{} }
 
+// ---- 並び替え / 絞り込み (端末ごとに localStorage へ保持) --------------------
+// 既定の 'manual' はサーバーが返した順そのまま = ピン留めが先頭、その後は D&D で保存した order。
+// manual 以外を選んでいる間と、絞り込みが効いている間は D&D を無効にする:
+//   - 表示順とサーバー上の order が食い違うので、ドロップ位置をどう保存すべきか決まらない
+//   - persistOrder() は表示中の行の ID だけを送るため、絞り込みで隠れた行の順序が壊れる
+const SORTS = ['manual','updatedDesc','updatedAsc','titleAsc'];
+const SORT_KEY = { manual:'sortManual', updatedDesc:'sortUpdatedDesc', updatedAsc:'sortUpdatedAsc', titleAsc:'sortTitleAsc' };
+const LS_SORT = 'hv:sort';
+const LS_PINNED_ONLY = 'hv:pinnedOnly';
+const LS_TAGS = 'hv:tagFilter';
+let SORT = (function(){ const v = lsGet(LS_SORT); return SORTS.indexOf(v) !== -1 ? v : 'manual'; })();
+let PINNED_ONLY = lsGet(LS_PINNED_ONLY) === '1';
+// タグは大文字小文字を無視して突き合わせるので、小文字化したキーで持つ
+let TAG_FILTER = (function(){
+  try{
+    const a = JSON.parse(lsGet(LS_TAGS) || '[]');
+    return new Set(Array.isArray(a) ? a.filter(x=>typeof x === 'string') : []);
+  }catch{ return new Set(); }
+})();
+function saveSort(){ lsSet(LS_SORT, SORT); }
+function saveFilters(){
+  lsSet(LS_PINNED_ONLY, PINNED_ONLY ? '1' : '');
+  lsSet(LS_TAGS, JSON.stringify([...TAG_FILTER]));
+}
+function tagsOf(s){ return (s.tags||'').split(',').map(x=>x.trim()).filter(Boolean); }
+function filtersActive(){ return PINNED_ONLY || TAG_FILTER.size > 0; }
+function dragEnabled(){ return SORT === 'manual' && !filtersActive(); }
+// タイトルの比較。数字は数値として見る (page2 が page10 より前に来るように)
+function titleCmp(a,b){
+  return String(a.title||'').localeCompare(String(b.title||''), undefined, { numeric:true, sensitivity:'base' });
+}
+// 絞り込み → 並び替え の順に通した表示行。検索中は SEARCH_RESULTS が入力になる。
+function visibleRows(){
+  let rows = SEARCH_RESULTS !== null ? SEARCH_RESULTS : SNIPPETS;
+  if(PINNED_ONLY) rows = rows.filter(s=>!!s.pinned);
+  if(TAG_FILTER.size){
+    // 複数選択は AND (選んだタグを全部持つものだけ残す)
+    const want = [...TAG_FILTER];
+    rows = rows.filter(s=>{
+      const keys = tagsOf(s).map(x=>x.toLowerCase());
+      return want.every(k=>keys.indexOf(k) !== -1);
+    });
+  }
+  if(SORT === 'manual') return rows; // サーバーが決めた表示順をそのまま使う (既定の挙動)
+  const cmp = SORT === 'updatedDesc' ? (a,b)=>b.updated-a.updated
+    : SORT === 'updatedAsc' ? (a,b)=>a.updated-b.updated
+    : titleCmp;
+  // ピン留めはどの軸でも先頭に固定する (サーバー側の並びと揃える)
+  return rows.slice().sort((a,b)=>((b.pinned?1:0)-(a.pinned?1:0)) || cmp(a,b));
+}
+// 実在しないタグを選んだままだと結果が常に0件になり、一覧から抜け出せなくなる。
+// スニペットの削除・タグ編集で消えたものは読み込みのたびに落とす。
+function pruneTagFilter(){
+  if(!TAG_FILTER.size) return;
+  const live = new Set();
+  for(const s of SNIPPETS) for(const name of tagsOf(s)) live.add(name.toLowerCase());
+  let changed = false;
+  for(const k of [...TAG_FILTER]) if(!live.has(k)){ TAG_FILTER.delete(k); changed = true; }
+  if(changed) saveFilters();
+}
+// タグ一覧は常に SNIPPETS 全体から作る (絞り込み後から作ると、一度絞ったら他のタグを選べなくなる)。
+// 表示名は最初に現れた綴りを採用し、件数は大文字小文字を無視して数える。
+function allTags(){
+  const m = new Map(); // key(小文字) -> { label, n }
+  for(const s of SNIPPETS){
+    // 件数は「そのタグを持つスニペットの数」= 絞り込んだときの行数。1スニペット内の
+    // 重複 ("foo, foo" や "foo, Foo") を数えると、バッジの数と実際の結果が食い違う。
+    const seen = new Set();
+    for(const name of tagsOf(s)){
+      const key = name.toLowerCase();
+      if(seen.has(key)) continue;
+      seen.add(key);
+      const cur = m.get(key);
+      if(cur) cur.n++; else m.set(key, { label:name, n:1 });
+    }
+  }
+  return [...m.entries()].map(([key,v])=>({ key, label:v.label, n:v.n }))
+    .sort((a,b)=>titleCmp({ title:a.label }, { title:b.label }));
+}
+function setSort(v){
+  if(SORTS.indexOf(v) === -1) return;
+  SORT = v; saveSort();
+  renderSortMenu(); renderList();
+}
+function toggleTag(key){
+  if(TAG_FILTER.has(key)) TAG_FILTER.delete(key); else TAG_FILTER.add(key);
+  saveFilters();
+}
+function setPinnedOnly(v){ PINNED_ONLY = !!v; saveFilters(); }
+function clearFilters(){ PINNED_ONLY = false; TAG_FILTER.clear(); saveFilters(); }
+
+// 並び替えメニュー。項目は固定で、選択中に ✓ を付ける。
+function renderSortMenu(){
+  $('sortMenu').innerHTML = SORTS.map(k=>{
+    const on = SORT === k;
+    return `<button class="menu-item" type="button" role="menuitemradio" tabindex="-1" data-sort="${esc(k)}" aria-checked="${on?'true':'false'}">`
+      + `<span class="check">${on?'✓':''}</span><span class="mi-label">${esc(T[SORT_KEY[k]])}</span></button>`;
+  }).join('');
+  $('sortLabel').textContent = T[SORT_KEY[SORT]];
+  $('sortBtn').classList.toggle('on', SORT !== 'manual');
+}
+// 絞り込みメニュー: ピン留めのみ / タグ (複数選択・AND) / 解除。
+// 押すたびに作り直すので、開いたまま操作されたときのフォーカス復帰は呼び出し側で面倒を見る。
+function renderFilterMenu(){
+  const tags = allTags();
+  let html = `<button class="menu-item" type="button" role="menuitemcheckbox" tabindex="-1" data-pinned="1" aria-checked="${PINNED_ONLY?'true':'false'}">`
+    + `<span class="check">${PINNED_ONLY?'✓':''}</span><span class="mi-label">${esc(T.filterPinnedOnly)}</span></button>`
+    + '<div class="menu-sep"></div>';
+  if(tags.length === 0){
+    html += `<div class="menu-item" aria-disabled="true"><span class="check"></span><span class="mi-label">${esc(T.filterNoTags)}</span></div>`;
+  }else{
+    html += tags.map(tg=>{
+      const on = TAG_FILTER.has(tg.key);
+      return `<button class="menu-item" type="button" role="menuitemcheckbox" tabindex="-1" data-tag="${esc(tg.key)}" aria-checked="${on?'true':'false'}">`
+        + `<span class="check">${on?'✓':''}</span><span class="mi-label" title="${esc(tg.label)}">${esc(tg.label)}</span>`
+        + `<span class="mi-count">${tg.n}</span></button>`;
+    }).join('');
+  }
+  if(filtersActive()){
+    html += '<div class="menu-sep"></div>'
+      + '<button class="menu-item" type="button" role="menuitem" tabindex="-1" data-clear="1">'
+      + `<span class="check"></span><span class="mi-label">${esc(T.filterClear)}</span></button>`;
+  }
+  menuRerendering = true; // 中身の入れ替えで飛ぶ focusout でメニューを閉じさせない
+  try{ $('filterMenu').innerHTML = html; } finally { menuRerendering = false; }
+  const n = TAG_FILTER.size + (PINNED_ONLY ? 1 : 0);
+  $('filterCount').textContent = String(n);
+  $('filterCount').classList.toggle('hide', n === 0);
+  $('filterBtn').classList.toggle('on', n > 0);
+  $('filterLabel').textContent = T.filterButton;
+}
+
 async function api(method, url, body, isForm, signal){
   const opts = { method, headers:{} };
   if (CSRF && method !== 'GET') opts.headers['x-csrf-token'] = CSRF;
@@ -440,18 +613,23 @@ async function loadList(){
   // 保存/削除/ピン留め/再読込のたびにここを通るので、検索結果の memo はまとめて捨てる
   // (古い抜粋や消えたスニペットを返し続けないため)。
   searchMemo.clear();
+  pruneTagFilter();   // 消えたタグを選んだままだと、一覧が常に0件になって抜け出せない
+  renderFilterMenu(); // タグの顔ぶれと件数は一覧の内容で変わる
   renderList();
 }
-// 検索結果(サーバー)を表示中なら SEARCH_RESULTS を、未検索なら SNIPPETS を描画する。
+// 検索結果(サーバー)を表示中なら SEARCH_RESULTS を、未検索なら SNIPPETS を土台にして、
+// 絞り込みと並び替え (visibleRows) を通した結果を描画する。
 // SEARCH_RESULTS の各要素は {id,title,tags,created,updated,bytes,field,excerpt}。
 function renderList(){
-  const rows = SEARCH_RESULTS !== null ? SEARCH_RESULTS : SNIPPETS;
+  const rows = visibleRows();
   // 詳細帯もここで更新する。openSnippet() は必ず renderList() を通るので選択の切替に追従し、
   // 保存/ピン/削除/再読込 (loadList) でも同じ経路で最新の値に直る。
   renderDetail();
   const list = $('list'); list.innerHTML='';
   if(rows.length===0){
-    list.innerHTML = `<div class="empty" style="height:120px">${esc(T.noSnippets)}</div>`;
+    // 「1件も持っていない」のか「条件に合うものが無い」のかを区別する
+    const msg = (filtersActive() || SEARCH_RESULTS !== null) ? T.noMatches : T.noSnippets;
+    list.innerHTML = `<div class="empty" style="height:120px">${esc(msg)}</div>`;
     return;
   }
   for(const s of rows){
@@ -470,8 +648,9 @@ function renderList(){
     div.querySelector('.del-item').onclick = (e)=>{ e.stopPropagation(); delById(s.id, s.title); };
     div.onclick = ()=>openSnippet(s.id);
     div.dataset.id = s.id;
-    // 並べ替えは通常一覧のみ (検索結果の並びはサーバー側の表示順なのでドラッグ対象外)
-    if(SEARCH_RESULTS === null) enableDrag(div, s);
+    // 並べ替えは通常一覧のみ (検索結果の並びはサーバー側の表示順なのでドラッグ対象外)。
+    // 並び替え/絞り込みが効いている間も外す (dragEnabled の定義にある理由による)。
+    if(SEARCH_RESULTS === null && dragEnabled()) enableDrag(div, s);
     list.appendChild(div);
   }
 }
@@ -692,27 +871,43 @@ $('loginBtn').onclick = login;
 $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 // メニュー項目はどれも押したらメニューを畳む (logout は reload するが、
 // 畳まないままだと将来その場でログイン画面へ戻したときにメニューが開きっぱなしになる)
-$('logoutBtn').onclick = ()=>{ setMenu(false); logout(); };
-// ---- アカウントメニュー (ヘッダの「⋯」。新規作成 / ログアウト) ----
+$('logoutBtn').onclick = ()=>{ setAccountMenu(false); logout(); };
+// ---- メニュー (ヘッダの「⋯」/ 並び替え / 絞り込み で共通) ----
+// 3つとも「トリガーボタン + role="menu"」という同じ形をしている。開閉・矢印キー移動・
+// 外側クリック・Escape を個別に書くと、片方だけ閉じ残るような食い違いが出るので1組に集約する。
+const MENUS = [
+  { menu:'accountMenu', btn:'menuBtn' },
+  { menu:'sortMenu',    btn:'sortBtn' },
+  { menu:'filterMenu',  btn:'filterBtn' },
+];
+// 絞り込みメニューは選択のたびに innerHTML を差し替える。その瞬間に飛ぶ focusout で
+// 閉じてしまわないよう、再描画中だけ focusout を無視する。
+let menuRerendering = false;
 // UI_HIDE_NEW=1 では #newBtn が display:none になる。隠れた項目へ focus() しても
 // 何も起きずフォーカスが迷子になるので、フォーカス移動は必ずこの一覧を通す。
-function visibleMenuItems(){
-  return Array.prototype.filter.call(
-    $('accountMenu').querySelectorAll('.menu-item'), el=>el.offsetParent !== null);
+// 「タグがありません」の案内は <div>(aria-disabled) で、フォーカスは持たせないので除く。
+function visibleMenuItems(menuEl){
+  return Array.prototype.filter.call(menuEl.querySelectorAll('.menu-item'),
+    el=>el.tagName === 'BUTTON' && el.offsetParent !== null);
 }
-function setMenu(open){
-  $('accountMenu').classList.toggle('hide', !open);
-  $('menuBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+function setMenu(menuEl, btnEl, open){
+  menuEl.classList.toggle('hide', !open);
+  btnEl.setAttribute('aria-expanded', open ? 'true' : 'false');
   // 先頭の項目ではなく「表示されている最初の項目」へ
-  if(open){ const items = visibleMenuItems(); if(items.length) items[0].focus(); }
+  if(open){ const items = visibleMenuItems(menuEl); if(items.length) items[0].focus(); }
 }
+function closeMenus(){ for(const m of MENUS) setMenu($(m.menu), $(m.btn), false); }
+// 開いているメニューの定義 (無ければ null)。Escape と n キーの判定に使う。
+function openMenu(){ return MENUS.find(m=>!$(m.menu).classList.contains('hide')) || null; }
+// アカウントメニューは項目側からも畳むので、呼びやすい形を用意しておく
+function setAccountMenu(open){ setMenu($('accountMenu'), $('menuBtn'), open); }
 // role="menu" を名乗る以上、上下/Home/End での移動を用意する。スクリーンリーダーは
 // menu ロールを見るとアプリケーションモードに入って矢印キーを奪うため、Tab だけでは
 // 「メニューとして操作できる」という約束を果たせない。
-function moveMenuFocus(e){
+function moveMenuFocus(e, menuEl){
   const key = e.key;
   if(key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return;
-  const items = visibleMenuItems();
+  const items = visibleMenuItems(menuEl);
   if(!items.length) return;
   e.preventDefault(); // 矢印キーで背後の一覧ごとスクロールさせない
   const cur = items.indexOf(document.activeElement);
@@ -723,13 +918,53 @@ function moveMenuFocus(e){
   else next = cur < 0 ? items.length - 1 : (cur - 1 + items.length) % items.length;
   items[next].focus();
 }
-$('accountMenu').addEventListener('keydown', moveMenuFocus);
-// stopPropagation しないと、直後に document の click が拾って開いた瞬間に閉じてしまう
-$('menuBtn').onclick = (e)=>{ e.stopPropagation(); setMenu($('accountMenu').classList.contains('hide')); };
-document.addEventListener('click', (e)=>{ if(!e.target.closest('.menu-wrap')) setMenu(false); });
-// Tab でメニューの外へ出たら閉じる (フォーカストラップは張らない)
-$('accountMenu').addEventListener('focusout', (e)=>{
-  if(!$('accountMenu').contains(e.relatedTarget) && e.relatedTarget !== $('menuBtn')) setMenu(false);
+for(const m of MENUS){
+  const menuEl = $(m.menu), btnEl = $(m.btn);
+  menuEl.addEventListener('keydown', (e)=>moveMenuFocus(e, menuEl));
+  // Tab でメニューの外へ出たら閉じる (フォーカストラップは張らない)
+  menuEl.addEventListener('focusout', (e)=>{
+    if(menuRerendering) return; // 中身の作り直しで一瞬フォーカスが外れるだけ
+    if(!menuEl.contains(e.relatedTarget) && e.relatedTarget !== btnEl) setMenu(menuEl, btnEl, false);
+  });
+  // stopPropagation しないと、直後に document の click が拾って開いた瞬間に閉じてしまう
+  btnEl.onclick = (e)=>{
+    e.stopPropagation();
+    const willOpen = menuEl.classList.contains('hide');
+    closeMenus(); // 別のメニューが開いていたら畳んでから開く (2つ同時に開かせない)
+    if(willOpen) setMenu(menuEl, btnEl, true);
+  };
+}
+document.addEventListener('click', (e)=>{
+  // 絞り込みの項目を押すと renderFilterMenu() が中身を作り直すため、この時点で e.target は
+  // DOM から切り離されている。切り離された要素の closest() は祖先を辿れず null を返すので、
+  // 「メニューの外を押した」と誤判定して、開いたまま使いたいメニューまで畳んでしまう。
+  if(!e.target.isConnected) return;
+  if(!e.target.closest('.menu-wrap,.fb-wrap')) closeMenus();
+});
+
+// 並び替えは単一選択なので、選んだら閉じてトリガーへフォーカスを戻す。
+$('sortMenu').addEventListener('click', (e)=>{
+  const el = e.target.closest('[data-sort]');
+  if(!el) return;
+  setSort(el.dataset.sort);
+  setMenu($('sortMenu'), $('sortBtn'), false);
+  $('sortBtn').focus();
+});
+// 絞り込みは続けて選べるように開いたままにする。項目は renderFilterMenu() が作り直すので、
+// 押した位置と同じ番号の項目へフォーカスを戻す (「解除」は押すと項目ごと消えるのでボタンへ)。
+$('filterMenu').addEventListener('click', (e)=>{
+  const el = e.target.closest('[data-tag],[data-pinned],[data-clear]');
+  if(!el) return;
+  const items = ()=>Array.prototype.slice.call($('filterMenu').querySelectorAll('.menu-item'));
+  const idx = items().indexOf(el);
+  if(el.dataset.clear) clearFilters();
+  else if(el.dataset.pinned) setPinnedOnly(!PINNED_ONLY);
+  else toggleTag(el.dataset.tag);
+  renderFilterMenu();
+  renderList();
+  const back = items()[idx];
+  if(back && back.tagName === 'BUTTON') back.focus();
+  else { setMenu($('filterMenu'), $('filterBtn'), false); $('filterBtn').focus(); }
 });
 
 // ---- キーボード操作 (document の keydown はこの1本だけ) ----
@@ -739,7 +974,9 @@ function handleKey(e){
   // IME 変換中のキーは拾わない (変換確定の Enter/Escape、および「ん」の入力途中など)。
   if(e.isComposing || e.keyCode === 229) return;
   if(e.key === 'Escape'){
-    if(!$('accountMenu').classList.contains('hide')){ setMenu(false); $('menuBtn').focus(); return; }
+    // 開いているメニュー (⋯ / 並び替え / 絞り込み) があれば、まずそれを畳む
+    const om = openMenu();
+    if(om){ setMenu($(om.menu), $(om.btn), false); $(om.btn).focus(); return; }
     // モーダルの可視状態は .overlay.show で表現されている (#modal に .hide は付かない)
     if($('modal').classList.contains('show')){ closeModal(); return; }
     return;
@@ -748,7 +985,7 @@ function handleKey(e){
   if(e.ctrlKey || e.metaKey || e.altKey) return;
   if(e.key !== 'n') return;
   if($('appView').classList.contains('hide')) return; // 未ログイン (ログイン画面) では効かせない
-  if(!$('accountMenu').classList.contains('hide')) return; // メニューを開いている間は効かせない
+  if(openMenu()) return; // いずれかのメニューを開いている間は効かせない
   const el = e.target;
   if(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
   if($('modal').classList.contains('show')) return; // 多重に開かない
@@ -882,7 +1119,7 @@ $('search').addEventListener('compositionend', ()=>{ composing = false; onSearch
 $('search').oninput = (e)=>{ if(composing || (e && e.isComposing)) return; onSearchInput(); };
 // メニュー項目なので、モーダルを開く前にメニューを畳む
 // (開いたままだと Escape がモーダルではなくメニューに先に効く)
-$('newBtn').onclick = ()=>{ setMenu(false); openModal(false); };
+$('newBtn').onclick = ()=>{ setAccountMenu(false); openModal(false); };
 $('mCancel').onclick = closeModal;
 $('mSave').onclick = save;
 // オーバーレイの余白 (モーダル本体の外) をクリックしたら閉じる
@@ -931,6 +1168,10 @@ function setSidebarWidth(px){
   rz.addEventListener('pointercancel', end);
 })();
 
+// 並び替え/絞り込みのボタンは中身が JS 側にあるので、一覧を読む前にラベルだけ入れておく
+// (タグの顔ぶれと件数は loadList() が renderFilterMenu() を呼び直して埋める)
+renderSortMenu();
+renderFilterMenu();
 checkAuth();
 </script>
 </body>
