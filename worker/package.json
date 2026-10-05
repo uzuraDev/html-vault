@@ -16,6 +16,6 @@
     "audit": "npm audit --audit-level=high"
   },
   "devDependencies": {
-    "wrangler": "^4.139.0"
+    "wrangler": "^4.146.0"
   }
 }
