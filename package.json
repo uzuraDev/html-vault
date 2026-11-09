@@ -16,7 +16,7 @@
   "dependencies": {
     "express": "^5.3.0",
     "express-session": "^1.18.0",
-    "express-rate-limit": "^8.7.2",
+    "express-rate-limit": "^8.7.3",
     "bcryptjs": "^3.0.3",
     "multer": "^2.5.0",
     "helmet": "^8.3.0"
